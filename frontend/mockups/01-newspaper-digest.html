@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Morning Round — AdvisorOS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,500;1,600&family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    /* palette — from app design tokens */
+    --primary-50:#fefdf4; --primary-100:#fef9e7; --primary-200:#fdf0c4; --primary-300:#fbe497;
+    --primary-600:#d4a017; --primary-700:#b8860b; --primary-800:#96690a; --primary-900:#6b4a08;
+    --inflow:#4a7c3a; --inflow-soft:#c9deb0; --outflow:#a8224a; --outflow-soft:#f4b8c6;
+    --secondary-700:#a8224a;
+
+    /* semantic */
+    --paper:var(--primary-50); --card:var(--primary-50); --card-2:var(--primary-100);
+    --ink:var(--primary-900); --ink-2:var(--primary-800); --mut:var(--primary-700); --faint:var(--primary-600);
+    --rule:var(--primary-300); --rule-2:var(--primary-200);
+    --brand:var(--primary-700); --brand-strong:var(--primary-800); --on-brand:var(--primary-50);
+    --stamp-color:107 74 8;
+
+    --font-serif:'Playfair Display',Georgia,serif;
+    --font-sans:'Inter',ui-sans-serif,system-ui,sans-serif;
+    --shadow-stamp:4px 4px 0 0 rgb(var(--stamp-color));
+    --shadow-stamp-lg:6px 6px 0 0 rgb(var(--stamp-color));
+    --shadow-stamp-sm:3px 3px 0 0 rgb(var(--stamp-color));
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:16px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    background:
+      repeating-linear-gradient(0deg, rgba(107,74,8,.04) 0 1px, transparent 1px 6px),
+      linear-gradient(180deg, var(--primary-100) 0%, var(--primary-200) 100%) fixed;}
+  .num{font-variant-numeric:tabular-nums}
+  .cap{font-family:var(--font-sans);text-transform:uppercase;letter-spacing:.2em;font-weight:600}
+
+  /* ---- Top bar ---- */
+  .topbar{position:sticky;top:0;z-index:20;padding:14px 20px 10px;
+    display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(180deg, var(--primary-100) 55%, transparent);}
+  .nav,.userpill{background:var(--paper);border:1.5px solid var(--primary-800);
+    box-shadow:var(--shadow-stamp-sm);}
+  .nav{display:flex;gap:2px;padding:5px}
+  .nav a{display:flex;align-items:center;gap:7px;text-decoration:none;color:var(--mut);
+    font-family:var(--font-sans);font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;
+    padding:9px 13px;white-space:nowrap}
+  .nav a svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6}
+  .nav a.on{background:var(--brand);color:var(--on-brand)}
+  .nav a:hover:not(.on){color:var(--ink);background:var(--card-2)}
+  .userpill{position:absolute;right:20px;display:flex;align-items:center;gap:12px;padding:10px 15px;
+    font-family:var(--font-sans);font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--ink)}
+  .userpill .sep{color:var(--rule)}
+  .userpill .moon{color:var(--brand)}
+  .userpill .signout{color:var(--secondary-700)}
+  @media(max-width:1120px){.userpill{display:none}}
+  @media(max-width:680px){.nav{flex-wrap:wrap;justify-content:center}.nav a span{display:none}.nav a{padding:9px}}
+
+  /* ---- Page ---- */
+  .page{max-width:1160px;margin:0 auto;padding:20px 28px 70px}
+  .eyebrow{font-family:var(--font-sans);font-weight:600;letter-spacing:.3em;text-transform:uppercase;
+    font-size:11px;color:var(--brand);margin:14px 0 10px}
+  h1.title{font-family:var(--font-serif);font-weight:900;color:var(--ink);
+    font-size:clamp(44px,7vw,88px);line-height:.9;letter-spacing:-.01em;margin:0;text-wrap:balance}
+  .titlerule{height:3px;border-top:3px double var(--primary-900);margin:20px 0 26px}
+
+  .deck{font-family:var(--font-serif);font-weight:400;font-size:clamp(21px,2.8vw,30px);line-height:1.36;
+    color:var(--ink-2);max-width:44ch;margin:0 0 32px;text-wrap:pretty}
+  .deck .big{font-weight:800;color:var(--ink)}
+  .deck .hot{color:var(--outflow);font-weight:700}
+  .deck .goodw{color:var(--inflow);font-weight:700}
+  .deck i{font-style:italic}
+
+  /* ---- Card grid ---- */
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:26px}
+  .card{background:var(--card);border:1.5px solid var(--primary-800);padding:22px 24px 24px;
+    box-shadow:var(--shadow-stamp-lg);position:relative}
+  .col8{grid-column:span 8} .col7{grid-column:span 7} .col6{grid-column:span 6}
+  .col5{grid-column:span 5} .col4{grid-column:span 4}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}.col8,.col7,.col6,.col5,.col4{grid-column:auto}}
+
+  .card > h2{font-family:var(--font-serif);font-style:italic;font-weight:500;font-size:24px;color:var(--ink);
+    margin:0 0 4px;letter-spacing:-.01em}
+  .card > .h2rule{height:1px;background:var(--primary-300);margin:12px 0 18px}
+
+  /* featured "attention today" */
+  .flag{display:inline-block;font-family:var(--font-sans);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+    font-weight:700;padding:4px 10px;vertical-align:2px}
+  .flag.crit{background:var(--outflow-soft);color:var(--secondary-700)}
+  .feat-name{font-family:var(--font-serif);font-weight:800;font-size:34px;color:var(--ink);line-height:1;margin:6px 0 2px;letter-spacing:-.01em}
+  .feat-sub{color:var(--mut);font-size:14px;margin:0 0 16px}
+  .sub-h{font-family:var(--font-sans);font-weight:700;color:var(--brand);font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin:18px 0 8px}
+  ul.obs{list-style:none;margin:0;padding:0}
+  ul.obs li{position:relative;padding:6px 0 6px 22px;font-size:15.5px;color:var(--ink-2)}
+  ul.obs li::before{content:"";position:absolute;left:2px;top:14px;width:7px;height:7px;background:var(--brand)}
+  ul.obs li b{color:var(--ink);font-weight:700}
+  .movebar{margin-top:18px;background:var(--card-2);border-left:3px solid var(--brand);
+    padding:12px 15px;font-size:14.5px;color:var(--ink-2)}
+  .movebar b{font-weight:700;color:var(--brand-strong)}
+
+  /* stat list */
+  .stats{display:flex;flex-direction:column}
+  .stat{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:10px 0;border-bottom:1px dotted var(--primary-300)}
+  .stat:last-child{border-bottom:0}
+  .stat .l{color:var(--mut);font-size:14px}
+  .stat .v{font-family:var(--font-serif);font-weight:700;font-size:22px;color:var(--ink)}
+  .stat .v.hot{color:var(--outflow)} .stat .v.good{color:var(--inflow)}
+
+  /* watchlist table */
+  .watch{width:100%;border-collapse:collapse}
+  .watch th{font-family:var(--font-sans);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--mut);
+    text-align:left;font-weight:600;padding:0 8px 12px}
+  .watch th.r,.watch td.r{text-align:right}
+  .watch td{padding:12px 8px;border-top:1px solid var(--primary-200);font-size:15px;vertical-align:middle}
+  .watch tr:hover td{background:var(--card-2)}
+  .rank{font-family:var(--font-serif);font-weight:800;color:var(--brand);font-size:18px;width:22px}
+  .wname{font-family:var(--font-serif);font-weight:700;color:var(--ink);font-size:16px}
+  .wwhy{color:var(--mut);font-size:13px}
+  .sev{font-family:var(--font-sans);font-weight:700;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+  .sev.c{color:var(--outflow)} .sev.w{color:var(--primary-600)} .sev.o{color:var(--inflow)}
+
+  /* overnight */
+  .over{font-size:15.5px;color:var(--ink-2);line-height:1.6}
+  .over .metric{font-family:var(--font-serif);font-weight:800;color:var(--brand-strong);font-size:16px}
+  .simrow{display:flex;gap:10px;align-items:center;margin-top:16px;padding-top:16px;border-top:1px solid var(--primary-300)}
+  .chip{font-family:var(--font-sans);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--inflow);
+    background:var(--inflow-soft);padding:5px 11px;font-weight:700}
+  .chip.slow{color:var(--mut);background:var(--card-2);border:1px solid var(--primary-300)}
+
+  /* mini heatmap */
+  .hm{display:grid;grid-template-columns:96px repeat(3,1fr);gap:6px;font-size:13px}
+  .hm .colh{font-family:var(--font-sans);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;color:var(--mut);text-align:center;padding-bottom:2px}
+  .hm .rowh{display:flex;flex-direction:column;justify-content:center;color:var(--ink);font-size:13px;font-weight:500}
+  .hm .rowh small{color:var(--faint);font-size:10px}
+  .hc{padding:12px 4px;text-align:center;font-family:var(--font-serif);font-weight:700;font-size:18px;font-variant-numeric:tabular-nums}
+  .hc small{display:block;font-family:var(--font-sans);font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;opacity:.8}
+  .hc.ok{background:rgba(74,124,58,.14);color:var(--inflow)}
+  .hc.mid{background:rgba(184,134,11,.16);color:var(--primary-800)}
+  .hc.bad{background:rgba(168,34,74,.13);color:var(--outflow);box-shadow:0 0 0 1.5px rgba(168,34,74,.4) inset}
+
+  /* opportunities */
+  .opp{display:flex;gap:12px;align-items:flex-start;padding:13px 0;border-bottom:1px solid var(--primary-200)}
+  .opp:last-child{border-bottom:0}
+  .opp .mk{font-family:var(--font-serif);font-weight:800;color:var(--inflow);font-size:20px;line-height:1;margin-top:1px}
+  .opp .ttl{font-family:var(--font-serif);font-weight:700;color:var(--ink);font-size:16px}
+  .opp .d{color:var(--mut);font-size:13.5px}
+  .opp .amt{margin-left:auto;font-family:var(--font-sans);font-weight:700;color:var(--inflow);white-space:nowrap;font-size:13px}
+
+  footer{display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:30px;
+    font-family:var(--font-sans);text-transform:uppercase;letter-spacing:.18em;font-size:10.5px;font-weight:600;color:var(--faint)}
+  footer svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.6}
+</style>
+</head>
+<body>
+  <!-- Top nav (matches app shell) -->
+  <div class="topbar">
+    <nav class="nav">
+      <a class="on" href="#"><svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5"/><rect x="9" y="2" width="5" height="5"/><rect x="2" y="9" width="5" height="5"/><rect x="9" y="9" width="5" height="5"/></svg><span>Overview</span></a>
+      <a href="#"><svg viewBox="0 0 16 16"><path d="M3 5h9l-2-2M13 11H4l2 2"/></svg><span>Clients</span></a>
+      <a href="02-terminal-radar.html"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.5"/></svg><span>Radar</span></a>
+      <a href="03-meeting-brief.html"><svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="9"/><path d="M2 6h12"/></svg><span>Briefs</span></a>
+      <a href="#"><svg viewBox="0 0 16 16"><path d="M3 12V4a1 1 0 0 1 1-1h6l3 3v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/></svg><span>Digest</span></a>
+      <a href="#"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2M4 4l1.4 1.4M10.6 10.6 12 12M12 4l-1.4 1.4M5.4 10.6 4 12"/></svg><span>Settings</span></a>
+    </nav>
+    <div class="userpill"><span>Hiranyey Gajbhiye</span><span class="sep">|</span><span class="moon">☾</span><span class="sep">|</span><span class="signout">Sign out</span></div>
+  </div>
+
+  <div class="page">
+    <p class="eyebrow">Book Digest · Wednesday, 1 July 2026</p>
+    <h1 class="title">The morning round</h1>
+    <div class="titlerule"></div>
+
+    <p class="deck"><span class="big">512 clients</span> under watch — <span class="hot">12 need action today</span>, led by a client <i class="hot">holding more risk than she can stomach</i>, while <span class="goodw">three sit on unclaimed tax savings</span>.</p>
+
+    <div class="grid">
+
+      <!-- Featured: attention today -->
+      <article class="card col8">
+        <h2>Needs you first</h2>
+        <div class="h2rule"></div>
+        <span class="flag crit">Suitability breach</span>
+        <div class="feat-name">Priya Sharma</div>
+        <p class="feat-sub">Profiled Conservative · ₹1.84 Cr · client since 2019</p>
+
+        <div class="sub-h">The gap</div>
+        <ul class="obs">
+          <li>Profiled <b>conservative</b> — can tolerate roughly a <b>−10%</b> bad year.</li>
+          <li>50,000 simulated futures put her worst-case year at <b>−28%</b> — an <b>18-point</b> gap between the risk she holds and the risk she signed up for.</li>
+          <li>In a real downturn she's the client most likely to <b>panic-sell at the bottom</b>.</li>
+        </ul>
+
+        <div class="movebar">Suggested move — <b>trim equity toward her 55/45 target</b>; a single rebalance closes ~12 points of the gap and brings her back inside profile.</div>
+      </article>
+
+      <!-- By the numbers -->
+      <aside class="card col4">
+        <h2>By the numbers</h2>
+        <div class="h2rule"></div>
+        <div class="stats">
+          <div class="stat"><span class="l">Clients under watch</span><span class="v num">512</span></div>
+          <div class="stat"><span class="l">Need action today</span><span class="v hot num">12</span></div>
+          <div class="stat"><span class="l">Assets under advice</span><span class="v num">₹684 Cr</span></div>
+          <div class="stat"><span class="l">Suitability mismatches</span><span class="v num">8</span></div>
+          <div class="stat"><span class="l">Rebalances due</span><span class="v num">5</span></div>
+          <div class="stat"><span class="l">Tax opportunities</span><span class="v good num">3</span></div>
+        </div>
+      </aside>
+
+      <!-- Watchlist -->
+      <article class="card col8">
+        <h2>The watchlist</h2>
+        <div class="h2rule"></div>
+        <table class="watch">
+          <thead><tr><th>#</th><th>Client</th><th>Why</th><th class="r">Signal</th><th class="r">Status</th></tr></thead>
+          <tbody>
+            <tr><td class="rank">1</td><td class="wname">Priya Sharma</td><td class="wwhy">Suitability gap between profile &amp; portfolio</td><td class="r num">−18 pts</td><td class="r"><span class="sev c">Critical</span></td></tr>
+            <tr><td class="rank">2</td><td class="wname">Vikram Singh</td><td class="wwhy">Retirement success dropped to 58%</td><td class="r num">off track</td><td class="r"><span class="sev c">Critical</span></td></tr>
+            <tr><td class="rank">3</td><td class="wname">Anjali Rao</td><td class="wwhy">Equity drifted +12% after June rally</td><td class="r num">+12%</td><td class="r"><span class="sev w">Review</span></td></tr>
+            <tr><td class="rank">4</td><td class="wname">Rohit Verma</td><td class="wwhy">41% concentrated in one stock</td><td class="r num">41%</td><td class="r"><span class="sev w">Review</span></td></tr>
+            <tr><td class="rank">5</td><td class="wname">Deepak Nair</td><td class="wwhy">₹2.1 L harvestable loss, window closing</td><td class="r num">₹41k tax</td><td class="r"><span class="sev o">Act soon</span></td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <!-- Overnight -->
+      <aside class="card col4">
+        <h2>Overnight</h2>
+        <div class="h2rule"></div>
+        <p class="over"><span class="metric">25.6 million</span> market futures simulated across all 512 clients last night. Every probability on this page is read off those paths — not a straight-line guess.</p>
+        <div class="simrow"><span class="chip">GPU · 4.2s</span><span class="chip slow">CPU ~9 min</span></div>
+      </aside>
+
+      <!-- Suitability heatmap -->
+      <article class="card col6">
+        <h2>Suitability at a glance</h2>
+        <div class="h2rule"></div>
+        <div class="hm">
+          <div></div>
+          <div class="colh">to −10%</div><div class="colh">−10 to −20%</div><div class="colh">worse</div>
+          <div class="rowh">Conservative<small>tolerates −10%</small></div>
+          <div class="hc ok">126</div><div class="hc mid">22<small>tight</small></div><div class="hc bad">7<small>breach</small></div>
+          <div class="rowh">Balanced<small>tolerates −20%</small></div>
+          <div class="hc ok">149</div><div class="hc ok">88</div><div class="hc bad">1<small>breach</small></div>
+          <div class="rowh">Aggressive<small>tolerates −35%</small></div>
+          <div class="hc ok">112</div><div class="hc ok">—</div><div class="hc mid">9<small>tight</small></div>
+        </div>
+      </article>
+
+      <!-- Opportunities -->
+      <article class="card col6">
+        <h2>Opportunities this week</h2>
+        <div class="h2rule"></div>
+        <div class="opp"><span class="mk">＋</span><div><div class="ttl">Deepak Nair — harvest ₹2.1 L loss</div><div class="d">Offsets booked gains before the July window closes.</div></div><span class="amt">save ₹41k</span></div>
+        <div class="opp"><span class="mk">＋</span><div><div class="ttl">Anjali Rao — rebalance the June drift</div><div class="d">Clean, billable trade back to the 70/30 target.</div></div><span class="amt">+ activity</span></div>
+        <div class="opp"><span class="mk">＋</span><div><div class="ttl">Meera Iyer — reassure, don't act</div><div class="d">Education goal clears 91% confidence. A good-news call.</div></div><span class="amt">91% ✓</span></div>
+      </article>
+
+    </div>
+
+    <footer>Compiled overnight by AdvisorOS · Updated 3 hr ago <svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v2h-2"/></svg></footer>
+  </div>
+</body>
+</html>

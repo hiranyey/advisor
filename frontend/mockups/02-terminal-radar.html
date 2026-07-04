@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Suitability Radar — AdvisorOS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,500;1,600&family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary-50:#fefdf4; --primary-100:#fef9e7; --primary-200:#fdf0c4; --primary-300:#fbe497;
+    --primary-600:#d4a017; --primary-700:#b8860b; --primary-800:#96690a; --primary-900:#6b4a08;
+    --inflow:#4a7c3a; --inflow-soft:#c9deb0; --outflow:#a8224a; --outflow-soft:#f4b8c6;
+    --secondary-700:#a8224a;
+    --paper:var(--primary-50); --card:var(--primary-50); --card-2:var(--primary-100);
+    --ink:var(--primary-900); --ink-2:var(--primary-800); --mut:var(--primary-700); --faint:var(--primary-600);
+    --rule:var(--primary-300); --rule-2:var(--primary-200);
+    --brand:var(--primary-700); --brand-strong:var(--primary-800); --on-brand:var(--primary-50);
+    --stamp-color:107 74 8;
+    --font-serif:'Playfair Display',Georgia,serif;
+    --font-sans:'Inter',ui-sans-serif,system-ui,sans-serif;
+    --shadow-stamp-lg:6px 6px 0 0 rgb(var(--stamp-color));
+    --shadow-stamp-sm:3px 3px 0 0 rgb(var(--stamp-color));
+  }
+  *{box-sizing:border-box}
+  body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:16px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    background:repeating-linear-gradient(0deg, rgba(107,74,8,.04) 0 1px, transparent 1px 6px),
+      linear-gradient(180deg, var(--primary-100) 0%, var(--primary-200) 100%) fixed;}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* nav */
+  .topbar{position:sticky;top:0;z-index:20;padding:14px 20px 10px;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(180deg, var(--primary-100) 55%, transparent);}
+  .nav,.userpill{background:var(--paper);border:1.5px solid var(--primary-800);box-shadow:var(--shadow-stamp-sm)}
+  .nav{display:flex;gap:2px;padding:5px}
+  .nav a{display:flex;align-items:center;gap:7px;text-decoration:none;color:var(--mut);font-family:var(--font-sans);
+    font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;padding:9px 13px;white-space:nowrap}
+  .nav a svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6}
+  .nav a.on{background:var(--brand);color:var(--on-brand)}
+  .nav a:hover:not(.on){color:var(--ink);background:var(--card-2)}
+  .userpill{position:absolute;right:20px;display:flex;align-items:center;gap:12px;padding:10px 15px;font-family:var(--font-sans);
+    font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--ink)}
+  .userpill .sep{color:var(--rule)} .userpill .moon{color:var(--brand)} .userpill .signout{color:var(--secondary-700)}
+  @media(max-width:1120px){.userpill{display:none}}
+  @media(max-width:680px){.nav{flex-wrap:wrap;justify-content:center}.nav a span{display:none}.nav a{padding:9px}}
+
+  .page{max-width:1180px;margin:0 auto;padding:20px 28px 70px}
+  .eyebrow{font-family:var(--font-sans);font-weight:600;letter-spacing:.3em;text-transform:uppercase;font-size:11px;color:var(--brand);margin:14px 0 10px}
+  h1.title{font-family:var(--font-serif);font-weight:900;color:var(--ink);font-size:clamp(40px,6vw,74px);line-height:.9;letter-spacing:-.01em;margin:0;text-wrap:balance}
+  .titlerule{height:3px;border-top:3px double var(--primary-900);margin:20px 0 20px}
+  .runline{font-family:var(--font-sans);font-size:12px;color:var(--mut);margin:0 0 26px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;font-weight:500}
+  .runline b{color:var(--inflow);font-weight:700}
+  .runline .slow{color:var(--faint)}
+  .dot{width:8px;height:8px;background:var(--inflow);display:inline-block;animation:pulse 2.4s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(74,124,58,.5)}70%{box-shadow:0 0 0 7px rgba(74,124,58,0)}100%{box-shadow:0 0 0 0 rgba(74,124,58,0)}}
+  @media(prefers-reduced-motion:reduce){.dot{animation:none}}
+
+  .card{background:var(--card);border:1.5px solid var(--primary-800);padding:20px 22px 22px;box-shadow:var(--shadow-stamp-lg);position:relative}
+  .card h2{font-family:var(--font-serif);font-style:italic;font-weight:500;font-size:23px;color:var(--ink);margin:0 0 3px;letter-spacing:-.01em}
+  .card .h2sub{color:var(--mut);font-size:13px;margin:0 0 16px}
+  .card .h2rule{height:1px;background:var(--primary-300);margin:10px 0 16px}
+
+  /* KPI strip */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:22px;margin-bottom:26px}
+  @media(max-width:820px){.kpis{grid-template-columns:repeat(2,1fr)}}
+  .kpi{background:var(--card);border:1.5px solid var(--primary-800);box-shadow:var(--shadow-stamp-lg);padding:16px 18px;border-left-width:5px}
+  .kpi.crit{border-left-color:var(--outflow)} .kpi.warn{border-left-color:var(--primary-600)}
+  .kpi.good{border-left-color:var(--inflow)} .kpi.ink{border-left-color:var(--primary-900)}
+  .kpi .lab{font-family:var(--font-sans);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--mut);font-weight:600}
+  .kpi .val{font-family:var(--font-serif);font-size:38px;font-weight:800;margin-top:6px;font-variant-numeric:tabular-nums;line-height:1}
+  .kpi .val.crit{color:var(--outflow)} .kpi .val.good{color:var(--inflow)} .kpi .val.warn{color:var(--primary-700)}
+  .kpi .foot{font-size:12px;color:var(--faint);margin-top:5px}
+
+  .grid{display:grid;grid-template-columns:1.35fr 1fr;gap:22px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .full{grid-column:1/-1;margin-top:22px}
+
+  /* heatmap */
+  .hm{display:grid;grid-template-columns:112px repeat(4,1fr);gap:6px;align-items:stretch}
+  .hm .corner{font-size:10px;color:var(--faint);align-self:end}
+  .hm .colh{font-family:var(--font-sans);font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;color:var(--mut);text-align:center;padding-bottom:4px}
+  .hm .rowh{font-size:13px;color:var(--ink);display:flex;flex-direction:column;justify-content:center;font-weight:500}
+  .hm .rowh small{color:var(--faint);font-size:10px}
+  .hc{padding:14px 6px;text-align:center;font-family:var(--font-serif);font-variant-numeric:tabular-nums}
+  .hc .c{font-size:22px;font-weight:800} .hc .t{font-family:var(--font-sans);font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;opacity:.8}
+  .ok{background:rgba(74,124,58,.14);color:var(--inflow)}
+  .low{background:rgba(184,134,11,.16);color:var(--primary-800)}
+  .bad{background:rgba(168,34,74,.13);color:var(--outflow);box-shadow:0 0 0 1.5px rgba(168,34,74,.42) inset}
+  .legend{display:flex;gap:16px;margin-top:16px;font-size:11.5px;color:var(--mut);flex-wrap:wrap;font-weight:500}
+  .legend i{width:12px;height:12px;display:inline-block;vertical-align:-1px;margin-right:6px}
+
+  .fan{width:100%;height:auto;display:block}
+  .flabel{font-family:var(--font-sans);font-size:11px;font-weight:500}
+  .mini{color:var(--mut);font-size:13px} .mini b{color:var(--ink)}
+
+  table{width:100%;border-collapse:collapse}
+  th{font-family:var(--font-sans);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);text-align:left;padding:0 8px 12px;font-weight:600}
+  td{padding:12px 8px;border-top:1px solid var(--primary-200);font-size:15px}
+  tr:hover td{background:var(--card-2)}
+  td.name{font-family:var(--font-serif);font-weight:700;font-size:16px;color:var(--ink)}
+  .pill{font-family:var(--font-sans);font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;white-space:nowrap}
+  .pill.crit{background:var(--outflow-soft);color:var(--secondary-700)} .pill.warn{background:rgba(184,134,11,.16);color:var(--primary-800)}
+  .gap{font-family:var(--font-serif);font-weight:800;font-variant-numeric:tabular-nums;color:var(--outflow);font-size:16px}
+  .dim{color:var(--faint);font-size:12px}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <nav class="nav">
+      <a href="01-newspaper-digest.html"><svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5"/><rect x="9" y="2" width="5" height="5"/><rect x="2" y="9" width="5" height="5"/><rect x="9" y="9" width="5" height="5"/></svg><span>Overview</span></a>
+      <a href="#"><svg viewBox="0 0 16 16"><path d="M3 5h9l-2-2M13 11H4l2 2"/></svg><span>Clients</span></a>
+      <a class="on" href="#"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.5"/></svg><span>Radar</span></a>
+      <a href="03-meeting-brief.html"><svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="9"/><path d="M2 6h12"/></svg><span>Briefs</span></a>
+      <a href="01-newspaper-digest.html"><svg viewBox="0 0 16 16"><path d="M3 12V4a1 1 0 0 1 1-1h6l3 3v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/></svg><span>Digest</span></a>
+      <a href="#"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2M4 4l1.4 1.4M10.6 10.6 12 12M12 4l-1.4 1.4M5.4 10.6 4 12"/></svg><span>Settings</span></a>
+    </nav>
+    <div class="userpill"><span>Hiranyey Gajbhiye</span><span class="sep">|</span><span class="moon">☾</span><span class="sep">|</span><span class="signout">Sign out</span></div>
+  </div>
+
+  <div class="page">
+    <p class="eyebrow">Book Analytics</p>
+    <h1 class="title">The suitability radar</h1>
+    <div class="titlerule"></div>
+    <p class="runline"><span class="dot"></span> <span>Simulation complete</span> · <b>25,600,000 paths</b> · 512 clients × 50k futures · <b>GPU 4.2s</b> <span class="slow">(est. CPU 9m 11s)</span> · last run 03:14 IST</p>
+
+    <div class="kpis">
+      <div class="kpi crit"><div class="lab">Suitability Mismatches</div><div class="val crit num">8</div><div class="foot">holding more risk than profile allows</div></div>
+      <div class="kpi warn"><div class="lab">Elevated / Watch</div><div class="val warn num">24</div><div class="foot">within band, trending worse</div></div>
+      <div class="kpi good"><div class="lab">Book Median Success</div><div class="val good num">73%</div><div class="foot">across all tagged goals</div></div>
+      <div class="kpi ink"><div class="lab">Worst-Case Book VaR</div><div class="val num">−14.6%</div><div class="foot">95% 1-yr · CVaR −21.3%</div></div>
+    </div>
+
+    <div class="grid">
+      <!-- Heatmap -->
+      <div class="card">
+        <h2>Suitability heatmap</h2>
+        <p class="h2sub">Rows: client risk profile &amp; tolerable worst year · Columns: simulated 1-year worst case. Rose = downside the profile can't absorb.</p>
+        <div class="hm">
+          <div class="corner">profile ↓ / sim →</div>
+          <div class="colh">0 to −10%</div><div class="colh">−10 to −20%</div><div class="colh">−20 to −30%</div><div class="colh">worse</div>
+
+          <div class="rowh">Conservative<small>tolerates −10%</small></div>
+          <div class="hc ok"><div class="c">104</div><div class="t">Suited</div></div>
+          <div class="hc low"><div class="c">22</div><div class="t">Tight</div></div>
+          <div class="hc bad"><div class="c">6</div><div class="t">Breach</div></div>
+          <div class="hc bad"><div class="c">1</div><div class="t">Breach</div></div>
+
+          <div class="rowh">Balanced<small>tolerates −20%</small></div>
+          <div class="hc ok"><div class="c">61</div><div class="t">Suited</div></div>
+          <div class="hc ok"><div class="c">88</div><div class="t">Suited</div></div>
+          <div class="hc low"><div class="c">14</div><div class="t">Tight</div></div>
+          <div class="hc bad"><div class="c">1</div><div class="t">Breach</div></div>
+
+          <div class="rowh">Aggressive<small>tolerates −35%</small></div>
+          <div class="hc ok"><div class="c">20</div><div class="t">Suited</div></div>
+          <div class="hc ok"><div class="c">40</div><div class="t">Suited</div></div>
+          <div class="hc ok"><div class="c">52</div><div class="t">Suited</div></div>
+          <div class="hc low"><div class="c">9</div><div class="t">Tight</div></div>
+        </div>
+        <div class="legend">
+          <span><i style="background:rgba(74,124,58,.5)"></i>Suited</span>
+          <span><i style="background:rgba(184,134,11,.6)"></i>At the edge of tolerance</span>
+          <span><i style="background:rgba(168,34,74,.6)"></i>Breach — call this client</span>
+        </div>
+      </div>
+
+      <!-- Fan chart -->
+      <div class="card">
+        <h2>Goal projection · Vikram Singh</h2>
+        <p class="h2sub">Retirement 2044 · target ₹6.0 Cr · 50,000 simulated paths</p>
+        <svg class="fan" viewBox="0 0 560 300" role="img" aria-label="Monte Carlo fan chart of projected retirement corpus">
+          <defs>
+            <linearGradient id="b95" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#b8860b" stop-opacity="0.20"/>
+              <stop offset="1" stop-color="#b8860b" stop-opacity="0.04"/>
+            </linearGradient>
+          </defs>
+          <g stroke="#fbe497" stroke-width="1">
+            <line x1="52" y1="40" x2="540" y2="40"/><line x1="52" y1="100" x2="540" y2="100"/>
+            <line x1="52" y1="160" x2="540" y2="160"/><line x1="52" y1="220" x2="540" y2="220"/>
+            <line x1="52" y1="260" x2="540" y2="260"/>
+          </g>
+          <g class="flabel" fill="#d4a017" text-anchor="end">
+            <text x="46" y="44">₹9C</text><text x="46" y="104">₹7C</text>
+            <text x="46" y="164">₹5C</text><text x="46" y="224">₹3C</text><text x="46" y="264">₹2C</text>
+          </g>
+          <path d="M52,214 L120,196 L188,176 L256,150 L324,124 L392,96 L460,72 L540,44
+                   L540,196 L460,192 L392,196 L324,200 L256,206 L188,210 L120,214 L52,216 Z" fill="url(#b95)"/>
+          <path d="M52,213 L120,198 L188,182 L256,164 L324,146 L392,128 L460,112 L540,92
+                   L540,170 L460,166 L392,168 L324,172 L256,178 L188,186 L120,204 L52,214 Z" fill="#b8860b" fill-opacity="0.24"/>
+          <line x1="52" y1="130" x2="540" y2="130" stroke="#4a7c3a" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <text class="flabel" x="540" y="124" text-anchor="end" fill="#4a7c3a">target ₹6.0C</text>
+          <path d="M52,213 L120,201 L188,188 L256,172 L324,155 L392,140 L460,128 L540,120" fill="none" stroke="#96690a" stroke-width="2.5"/>
+          <circle cx="540" cy="120" r="4.5" fill="#96690a"/>
+          <g class="flabel" fill="#d4a017" text-anchor="middle">
+            <text x="52" y="278">2026</text><text x="256" y="278">2035</text><text x="540" y="278">2044</text>
+          </g>
+        </svg>
+        <p class="mini" style="margin:12px 0 0">Median lands just above target — but only <b>58%</b> of futures reach ₹6.0 Cr. Was 74% before the paused SIP. Flagged <b>off-track</b>.</p>
+      </div>
+
+      <!-- Table -->
+      <div class="card full">
+        <h2>Priority call list — suitability breaches</h2>
+        <p class="h2sub">Ranked by how far simulated downside exceeds the client's tolerance. Feeds today's digest.</p>
+        <table>
+          <thead><tr><th>#</th><th>Client</th><th>Profile</th><th>Tolerable</th><th>Simulated worst yr</th><th>Gap</th><th>Driver</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td class="name">Priya Sharma</td><td>Conservative</td><td class="num">−10%</td><td class="num">−28%</td><td class="gap">−18 pts</td><td class="dim">68% equity, small-cap tilt</td><td><span class="pill crit">breach</span></td></tr>
+            <tr><td class="num">2</td><td class="name">Rohit Verma</td><td>Balanced</td><td class="num">−20%</td><td class="num">−34%</td><td class="gap">−14 pts</td><td class="dim">41% in a single stock</td><td><span class="pill crit">breach</span></td></tr>
+            <tr><td class="num">3</td><td class="name">Sunita Patel</td><td>Conservative</td><td class="num">−10%</td><td class="num">−23%</td><td class="gap">−13 pts</td><td class="dim">sector concentration: IT</td><td><span class="pill crit">breach</span></td></tr>
+            <tr><td class="num">4</td><td class="name">Arjun Mehta</td><td>Conservative</td><td class="num">−10%</td><td class="num">−19%</td><td class="gap">−9 pts</td><td class="dim">high mid-cap allocation</td><td><span class="pill warn">watch</span></td></tr>
+            <tr><td class="num">5</td><td class="name">Kavya Reddy</td><td>Aggressive</td><td class="num">−35%</td><td class="num">−41%</td><td class="gap">−6 pts</td><td class="dim">leveraged thematic fund</td><td><span class="pill warn">watch</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

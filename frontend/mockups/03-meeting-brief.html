@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meeting Brief · Rahul Mehta — AdvisorOS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,500;1,600&family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary-50:#fefdf4; --primary-100:#fef9e7; --primary-200:#fdf0c4; --primary-300:#fbe497;
+    --primary-600:#d4a017; --primary-700:#b8860b; --primary-800:#96690a; --primary-900:#6b4a08;
+    --inflow:#4a7c3a; --inflow-soft:#c9deb0; --outflow:#a8224a; --outflow-soft:#f4b8c6;
+    --secondary-700:#a8224a;
+    --paper:var(--primary-50); --card:var(--primary-50); --card-2:var(--primary-100);
+    --ink:var(--primary-900); --ink-2:var(--primary-800); --mut:var(--primary-700); --faint:var(--primary-600);
+    --rule:var(--primary-300); --rule-2:var(--primary-200);
+    --brand:var(--primary-700); --brand-strong:var(--primary-800); --on-brand:var(--primary-50);
+    --stamp-color:107 74 8;
+    --font-serif:'Playfair Display',Georgia,serif;
+    --font-sans:'Inter',ui-sans-serif,system-ui,sans-serif;
+    --shadow-stamp-lg:6px 6px 0 0 rgb(var(--stamp-color));
+    --shadow-stamp-sm:3px 3px 0 0 rgb(var(--stamp-color));
+  }
+  *{box-sizing:border-box}
+  body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:15px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    background:repeating-linear-gradient(0deg, rgba(107,74,8,.04) 0 1px, transparent 1px 6px),
+      linear-gradient(180deg, var(--primary-100) 0%, var(--primary-200) 100%) fixed;padding-bottom:60px}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* nav */
+  .topbar{position:sticky;top:0;z-index:20;padding:14px 20px 10px;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(180deg, var(--primary-100) 55%, transparent);}
+  .nav,.userpill{background:var(--paper);border:1.5px solid var(--primary-800);box-shadow:var(--shadow-stamp-sm)}
+  .nav{display:flex;gap:2px;padding:5px}
+  .nav a{display:flex;align-items:center;gap:7px;text-decoration:none;color:var(--mut);font-family:var(--font-sans);
+    font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;padding:9px 13px;white-space:nowrap}
+  .nav a svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6}
+  .nav a.on{background:var(--brand);color:var(--on-brand)}
+  .nav a:hover:not(.on){color:var(--ink);background:var(--card-2)}
+  .userpill{position:absolute;right:20px;display:flex;align-items:center;gap:12px;padding:10px 15px;font-family:var(--font-sans);
+    font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--ink)}
+  .userpill .sep{color:var(--rule)} .userpill .moon{color:var(--brand)} .userpill .signout{color:var(--secondary-700)}
+  @media(max-width:1120px){.userpill{display:none}}
+  @media(max-width:680px){.nav{flex-wrap:wrap;justify-content:center}.nav a span{display:none}.nav a{padding:9px}}
+
+  .doc{max-width:900px;margin:0 auto;padding:20px 28px}
+
+  /* header card */
+  .head{background:var(--brand);color:var(--on-brand);border:1.5px solid var(--primary-900);box-shadow:var(--shadow-stamp-lg);padding:26px 30px}
+  .ey{font-family:var(--font-sans);font-size:10.5px;letter-spacing:.28em;text-transform:uppercase;font-weight:700;color:var(--primary-200);margin:0 0 8px}
+  .head h1{font-family:var(--font-serif);font-weight:800;font-size:clamp(34px,6vw,52px);line-height:.98;margin:0;letter-spacing:-.01em}
+  .meta{display:flex;gap:22px;flex-wrap:wrap;color:var(--primary-100);font-size:13px;margin-top:12px}
+  .meta b{color:#fff;font-weight:700}
+  .prep{margin-left:auto;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--primary-200)}
+
+  /* snapshot */
+  .snap{display:grid;grid-template-columns:repeat(4,1fr);background:var(--card);border:1.5px solid var(--primary-800);border-top:0;box-shadow:var(--shadow-stamp-lg)}
+  @media(max-width:640px){.snap{grid-template-columns:repeat(2,1fr)}}
+  .snap > div{padding:16px 20px;border-top:1px solid var(--primary-300)}
+  .snap > div + div{border-left:1px solid var(--primary-300)}
+  .snap .lab{font-family:var(--font-sans);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);font-weight:600}
+  .snap .v{font-family:var(--font-serif);font-weight:700;font-size:24px;margin-top:3px;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .snap .d{font-size:12px;margin-top:1px} .up{color:var(--inflow)} .dn{color:var(--outflow)}
+
+  section{margin-top:26px}
+  h2.sec{font-family:var(--font-sans);font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--brand);margin:0 0 14px}
+  .card{background:var(--card);border:1.5px solid var(--primary-800);box-shadow:var(--shadow-stamp-lg);padding:22px 24px}
+
+  /* goals */
+  .goal{display:grid;grid-template-columns:1fr auto;gap:6px 16px;align-items:center;padding:16px 0;border-bottom:1px solid var(--primary-200)}
+  .goal:last-child{border-bottom:0}
+  .goal .g-name{font-family:var(--font-serif);font-weight:700;font-size:19px;color:var(--ink)}
+  .goal .g-sub{color:var(--mut);font-size:12.5px}
+  .goal .g-pct{font-family:var(--font-serif);font-weight:800;font-size:28px;font-variant-numeric:tabular-nums;text-align:right}
+  .meter{grid-column:1/-1;height:10px;background:var(--primary-200);overflow:hidden;position:relative;border:1px solid var(--primary-300)}
+  .meter i{display:block;height:100%}
+  .meter .thr{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--primary-900);opacity:.55}
+  .fill-hi{background:var(--inflow)} .fill-mid{background:var(--primary-600)} .fill-lo{background:var(--outflow)}
+  .g-note{grid-column:1/-1;font-size:12.5px;color:var(--mut);margin-top:2px}
+  .badge{font-family:var(--font-sans);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:3px 9px;vertical-align:2px}
+  .badge.hi{background:var(--inflow-soft);color:var(--inflow)} .badge.mid{background:rgba(184,134,11,.18);color:var(--primary-800)} .badge.lo{background:var(--outflow-soft);color:var(--secondary-700)}
+
+  /* callout */
+  .callout{display:flex;gap:14px;background:var(--outflow-soft);border-left:5px solid var(--outflow);padding:16px 18px}
+  .callout .ic{font-family:var(--font-serif);font-weight:800;color:var(--secondary-700);font-size:26px;line-height:1}
+  .callout h3{margin:0 0 4px;font-family:var(--font-serif);font-size:18px;color:var(--ink)}
+  .callout p{margin:0;font-size:13.5px;color:var(--secondary-700)}
+
+  /* what-if */
+  .whatif{padding:22px 24px}
+  .whatif .q{font-family:var(--font-serif);font-style:italic;font-size:22px;margin:0 0 18px;color:var(--ink)}
+  .compare{display:grid;grid-template-columns:1fr 48px 1fr;align-items:stretch;gap:14px}
+  @media(max-width:560px){.compare{grid-template-columns:1fr;gap:10px}.arrow{transform:rotate(90deg);justify-self:center}}
+  .state{background:var(--paper);border:1.5px solid var(--primary-300);padding:18px}
+  .state.after{border-color:var(--inflow);box-shadow:4px 4px 0 0 var(--inflow)}
+  .state .st-lab{font-family:var(--font-sans);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);font-weight:600}
+  .state .st-pct{font-family:var(--font-serif);font-weight:800;font-size:52px;line-height:1;margin:6px 0 4px;font-variant-numeric:tabular-nums}
+  .before .st-pct{color:var(--primary-700)} .after .st-pct{color:var(--inflow)}
+  .state .st-d{font-size:12.5px;color:var(--mut)}
+  .arrow{font-family:var(--font-serif);font-size:30px;color:var(--inflow);display:flex;align-items:center;justify-content:center;font-weight:700}
+  .wi-foot{font-size:13px;color:var(--mut);margin:16px 0 0;font-style:italic}
+  .wi-foot b{font-style:normal;color:var(--inflow);font-weight:700}
+
+  ul.pts{list-style:none;margin:0;padding:0}
+  ul.pts li{padding:11px 0 11px 26px;position:relative;border-bottom:1px solid var(--primary-200);font-size:14.5px;color:var(--ink-2)}
+  ul.pts li:last-child{border-bottom:0}
+  ul.pts li::before{content:"";position:absolute;left:4px;top:18px;width:7px;height:7px;background:var(--brand)}
+  .actions{display:grid;gap:12px}
+  .act{display:flex;gap:12px;align-items:center;background:var(--card-2);border:1px solid var(--primary-300);padding:13px 16px}
+  .act .tick{width:20px;height:20px;border:2px solid var(--inflow);flex:none}
+  .act .t{font-family:var(--font-serif);font-weight:700;color:var(--ink);font-size:15.5px} .act .s{color:var(--mut);font-size:12.5px}
+  .act .save{margin-left:auto;font-family:var(--font-serif);font-weight:800;color:var(--inflow);white-space:nowrap;font-size:16px}
+  footer{max-width:900px;margin:24px auto 0;text-align:center;font-family:var(--font-sans);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <nav class="nav">
+      <a href="01-newspaper-digest.html"><svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5"/><rect x="9" y="2" width="5" height="5"/><rect x="2" y="9" width="5" height="5"/><rect x="9" y="9" width="5" height="5"/></svg><span>Overview</span></a>
+      <a href="#"><svg viewBox="0 0 16 16"><path d="M3 5h9l-2-2M13 11H4l2 2"/></svg><span>Clients</span></a>
+      <a href="02-terminal-radar.html"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.5"/></svg><span>Radar</span></a>
+      <a class="on" href="#"><svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="9"/><path d="M2 6h12"/></svg><span>Briefs</span></a>
+      <a href="01-newspaper-digest.html"><svg viewBox="0 0 16 16"><path d="M3 12V4a1 1 0 0 1 1-1h6l3 3v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/></svg><span>Digest</span></a>
+      <a href="#"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2M4 4l1.4 1.4M10.6 10.6 12 12M12 4l-1.4 1.4M5.4 10.6 4 12"/></svg><span>Settings</span></a>
+    </nav>
+    <div class="userpill"><span>Hiranyey Gajbhiye</span><span class="sep">|</span><span class="moon">☾</span><span class="sep">|</span><span class="signout">Sign out</span></div>
+  </div>
+
+  <div class="doc">
+    <header class="head">
+      <p class="ey">Client Meeting Brief</p>
+      <div style="display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px">
+        <h1>Rahul Mehta</h1>
+        <span class="prep">Prepared 12 min ago</span>
+      </div>
+      <div class="meta">
+        <span>Review at <b>3:00 PM today</b></span>
+        <span>Client since <b>2018</b></span>
+        <span>Profile <b>Balanced</b></span>
+        <span>Last review <b>4 Feb 2026</b></span>
+      </div>
+    </header>
+
+    <div class="snap">
+      <div><div class="lab">Net Worth</div><div class="v num">₹2.14 Cr</div><div class="d up">+₹18.2 L since last review</div></div>
+      <div><div class="lab">Invested / Liquid</div><div class="v num">₹1.72 Cr</div><div class="d">80% in mutual funds</div></div>
+      <div><div class="lab">Monthly SIP</div><div class="v num">₹85,000</div><div class="d">across 4 funds</div></div>
+      <div><div class="lab">Goals On Track</div><div class="v num">2 / 3</div><div class="d dn">retirement needs attention</div></div>
+    </div>
+
+    <section>
+      <h2 class="sec">Where each goal stands</h2>
+      <div class="card">
+        <div class="goal">
+          <div><span class="g-name">Retirement</span> <span class="badge mid">At risk</span><div class="g-sub">Target ₹6.0 Cr by 2044 · currently pacing to ₹5.1 Cr</div></div>
+          <div class="g-pct" style="color:var(--primary-700)">62%</div>
+          <div class="meter"><i class="fill-mid" style="width:62%"></i><span class="thr" style="left:80%"></span></div>
+          <div class="g-note">62% of 50,000 simulated futures reach the target. The mark at 80% is your confidence line — this goal sits below it.</div>
+        </div>
+        <div class="goal">
+          <div><span class="g-name">Child's Education</span> <span class="badge hi">On track</span><div class="g-sub">Target ₹45 L by 2032</div></div>
+          <div class="g-pct" style="color:var(--inflow)">88%</div>
+          <div class="meter"><i class="fill-hi" style="width:88%"></i><span class="thr" style="left:80%"></span></div>
+          <div class="g-note">Comfortably above the confidence line. No action — worth a reassuring word.</div>
+        </div>
+        <div class="goal">
+          <div><span class="g-name">Emergency Fund</span> <span class="badge hi">Funded</span><div class="g-sub">Target 6 months of expenses</div></div>
+          <div class="g-pct" style="color:var(--inflow)">100%</div>
+          <div class="meter"><i class="fill-hi" style="width:100%"></i></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="sec">One thing to raise</h2>
+      <div class="callout">
+        <div class="ic">!</div>
+        <div>
+          <h3>Concentration creeping up</h3>
+          <p>34% of Rahul's equity now sits in a single large-cap stock after its run-up. Still within a balanced profile, but simulated worst-year loss has widened to −19%. Worth a gentle trim before it becomes a suitability issue.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="sec">What-if · run this live in the meeting</h2>
+      <div class="card whatif">
+        <p class="q">“What happens to retirement if we increase the SIP by ₹5,000?”</p>
+        <div class="compare">
+          <div class="state before">
+            <div class="st-lab">Today</div>
+            <div class="st-pct num">62%</div>
+            <div class="st-d">chance of reaching ₹6.0 Cr · worst-case shortfall ₹18 L</div>
+          </div>
+          <div class="arrow">→</div>
+          <div class="state after">
+            <div class="st-lab">SIP ₹85k → ₹90k</div>
+            <div class="st-pct num">81%</div>
+            <div class="st-d">chance of reaching ₹6.0 Cr · worst-case shortfall ₹4 L</div>
+          </div>
+        </div>
+        <p class="wi-foot">Re-simulated across <b>50,000 market futures in ~1 second.</b> A ₹5,000/month change lifts success by 19 points and cuts the worst-case shortfall by ₹14 L.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="sec">Talking points</h2>
+      <div class="card">
+        <ul class="pts">
+          <li>Congratulate on the ₹18.2 L net-worth gain since February — strong year, mostly market-driven.</li>
+          <li>Retirement is the one gap: frame the ₹5,000 SIP bump as a small change with an outsized effect (62% → 81%).</li>
+          <li>Flag the single-stock concentration gently; propose trimming to his target weight on the next rebalance.</li>
+          <li>Education and emergency goals are healthy — lead with the good news.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="sec">Suggested actions</h2>
+      <div class="actions">
+        <div class="act"><span class="tick"></span><div><div class="t">Increase retirement SIP by ₹5,000/mo</div><div class="s">lifts success probability 62% → 81%</div></div><span class="save">+19 pts</span></div>
+        <div class="act"><span class="tick"></span><div><div class="t">Trim concentrated large-cap to target weight</div><div class="s">reduces simulated worst year from −19% to −14%</div></div><span class="save">−5% risk</span></div>
+        <div class="act"><span class="tick"></span><div><div class="t">Book ₹1.1 L in long-term gains under the ₹1 L LTCG exemption</div><div class="s">tax-efficient rebalancing window open till March</div></div><span class="save">₹0 tax</span></div>
+      </div>
+    </section>
+
+    <footer>AdvisorOS · Intelligence to prepare you — every decision remains yours</footer>
+  </div>
+</body>
+</html>
