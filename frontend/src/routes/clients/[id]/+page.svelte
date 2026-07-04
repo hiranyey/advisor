@@ -6,7 +6,7 @@
 	import AllocationBreakdown from '$lib/components/AllocationBreakdown.svelte';
 	import ValueChart from '$lib/components/ValueChart.svelte';
 	import RiskPill from '$lib/components/RiskPill.svelte';
-	import { ChevronLeft, TriangleAlert, User, Repeat, TrendingUp, ArrowDownRight, ArrowUpRight } from '@lucide/svelte';
+	import { ChevronLeft, TriangleAlert, User, Repeat, TrendingUp, ArrowDownRight, ArrowUpRight, Activity, ShieldAlert, Cpu, Gauge, Target } from '@lucide/svelte';
 
 	// Quick, non-blocking mount fade — cards rise in with a light stagger.
 	const rise = (i) => ({ y: 10, duration: 240, delay: i * 55 });
@@ -20,6 +20,11 @@
 	let loading = $state(true);
 	let error = $state(null);
 
+	// Live Monte Carlo insights — a ~1s single-client re-sim, loaded separately so it
+	// never blocks the ledger/holdings render.
+	let insights = $state(null);
+	let insightsError = $state(null);
+
 	$effect(() => {
 		load(id);
 	});
@@ -31,6 +36,8 @@
 		holdings = null;
 		sipData = null;
 		txnData = null;
+		insights = null;
+		insightsError = null;
 		try {
 			[client, holdings, sipData, txnData] = await Promise.all([
 				api.getClient(cid),
@@ -43,11 +50,30 @@
 		} finally {
 			loading = false;
 		}
+		// Fire the simulation independently — goal cards + risk panel fill in when ready.
+		api
+			.getInsights(cid)
+			.then((r) => (insights = r))
+			.catch((e) => (insightsError = e.message));
+	}
+
+	// goal_id → its simulated insight, for merging success onto the goal cards.
+	const goalInsight = $derived(
+		Object.fromEntries((insights?.goals ?? []).map((g) => [g.goal_id, g]))
+	);
+
+	// Tint a success probability: green on-track, amber close, red off-track.
+	function probClass(p) {
+		if (p == null) return '';
+		if (p >= 0.8) return 'good';
+		if (p >= 0.5) return 'watch';
+		return 'crit';
 	}
 
 	const flagLabel = {
 		concentrated_fund: 'Single fund > 25%',
-		concentrated_category: 'Single category > 40%'
+		concentrated_category: 'Single category > 40%',
+		off_track: 'Goal off track'
 	};
 </script>
 
@@ -87,8 +113,70 @@
 				<AllocationBreakdown allocation={holdings?.allocation ?? []} />
 			</div>
 
-			<!-- Goals -->
+			<!-- Monte Carlo risk analysis (live single-client re-sim) -->
 			<div class="card full" in:fly={rise(2)}>
+				<div class="siphead">
+					<h2><span class="h2icon"><Activity size={16} strokeWidth={2} /></span>Risk analysis</h2>
+					{#if insights}
+						<span class="simbadge" title="Backend + wall-time for this re-simulation">
+							<Cpu size={13} strokeWidth={2} />
+							{insights.backend} · {insights.n_paths.toLocaleString('en-IN')} paths ·
+							<b>{insights.elapsed_ms} ms</b>
+						</span>
+					{/if}
+				</div>
+
+				{#if insightsError}
+					<p class="dim">Couldn't run the simulation — {insightsError}</p>
+				{:else if !insights}
+					<p class="dim simloading"><Activity size={14} strokeWidth={2} /> Simulating futures…</p>
+				{:else}
+					<div class="verdict {insights.over_exposed ? 'crit' : 'good'}">
+						{#if insights.over_exposed}
+							<ShieldAlert size={16} strokeWidth={2} />
+							<span
+								>Over-exposed — worst-case 1-yr loss of <b>{pct(insights.max_drawdown)}</b>
+								exceeds the {pct(insights.tolerable_dd)} a {client.risk_profile} profile tolerates
+								(by {pct(insights.suitability_mismatch)}).</span
+							>
+						{:else}
+							<ShieldAlert size={16} strokeWidth={2} />
+							<span
+								>Within tolerance — worst-case 1-yr loss of <b>{pct(insights.max_drawdown)}</b>
+								stays under the {pct(insights.tolerable_dd)} a {client.risk_profile} profile tolerates.</span
+							>
+						{/if}
+					</div>
+
+					<div class="stats">
+						<div class="stat">
+							<span class="slabel"><Gauge size={13} strokeWidth={2} /> Worst-case drawdown</span>
+							<span class="sval {probClass(1 - insights.max_drawdown / (insights.tolerable_dd || 1))}"
+								>−{pct(insights.max_drawdown)}</span
+							>
+							<span class="ssub">tolerable −{pct(insights.tolerable_dd)}</span>
+						</div>
+						<div class="stat">
+							<span class="slabel">VaR 95%</span>
+							<span class="sval">−{pct(insights.var_95)}</span>
+							<span class="ssub">1-in-20 yearly loss</span>
+						</div>
+						<div class="stat">
+							<span class="slabel">CVaR 95%</span>
+							<span class="sval">−{pct(insights.cvar_95)}</span>
+							<span class="ssub">avg of the worst 5%</span>
+						</div>
+						<div class="stat">
+							<span class="slabel">Risk score</span>
+							<span class="sval">{insights.risk_score}<span class="ssuffix">/100</span></span>
+							<span class="ssub">downside intensity</span>
+						</div>
+					</div>
+				{/if}
+			</div>
+
+			<!-- Goals -->
+			<div class="card full" in:fly={rise(3)}>
 				<h2>Goals</h2>
 				{#if client.goals.length === 0}
 					<p class="dim">No goals recorded.</p>
@@ -97,6 +185,7 @@
 						{#each client.goals as g}
 							{@const prog = g.target_amount ? Math.min(g.funded_value / g.target_amount, 1) : 0}
 							{@const GIcon = goalIcon(g.name)}
+							{@const gi = goalInsight[g.id]}
 							<div class="goal">
 								<div class="goalhead">
 									<span class="gname"><span class="gicon"><GIcon size={17} strokeWidth={1.8} /></span>{g.name ?? 'Goal'}</span>
@@ -113,6 +202,38 @@
 									<span class="num">{inr(g.funded_value)} funded</span>
 									<span class="dim num">of {inr(g.target_amount)} · {pct(prog)}</span>
 								</div>
+
+								<!-- Monte Carlo success probability + get-on-track SIP -->
+								<div class="goalmc">
+									{#if gi}
+										<div class="probrow">
+											<span class="problabel"><Target size={12} strokeWidth={2.2} /> Chance of hitting target</span>
+											<span class="probval {probClass(gi.success_prob)}">{pct(gi.success_prob)}</span>
+										</div>
+										<div class="probbar">
+											<div class="probfill {probClass(gi.success_prob)}" style="width:{gi.success_prob * 100}%"></div>
+											<div class="probmark" style="left:{insights.confidence * 100}%" title="Target confidence {pct(insights.confidence)}"></div>
+										</div>
+										{#if gi.on_track}
+											<p class="mcnote good">On track · median outcome {inr(gi.p50)}</p>
+										{:else}
+											<p class="mcnote crit">
+												Off track ·
+												{#if gi.required_sip}
+													lift SIP to <b>{inr(gi.required_sip)}/mo</b>
+													{#if gi.current_sip}<span class="dim">(from {inr(gi.current_sip)})</span>{/if}
+													for {pct(insights.confidence)} confidence
+												{:else}
+													~{inr(gi.shortfall_expected)} short on average
+												{/if}
+											</p>
+										{/if}
+									{:else if insightsError}
+										<p class="mcnote dim">Simulation unavailable</p>
+									{:else}
+										<p class="mcnote dim skeleton">Simulating…</p>
+									{/if}
+								</div>
 							</div>
 						{/each}
 					</div>
@@ -120,7 +241,7 @@
 			</div>
 
 			<!-- Holdings table -->
-			<div class="card full" in:fly={rise(3)}>
+			<div class="card full" in:fly={rise(4)}>
 				<h2>Holdings</h2>
 				<table>
 					<thead>
@@ -157,7 +278,7 @@
 			</div>
 
 			<!-- SIP schedule -->
-			<div class="card full" in:fly={rise(4)}>
+			<div class="card full" in:fly={rise(5)}>
 				<div class="siphead">
 					<h2>SIP schedule</h2>
 					{#if sipData && sipData.sips.length}
@@ -212,7 +333,7 @@
 			</div>
 
 			<!-- Transaction ledger -->
-			<div class="card full" in:fly={rise(5)}>
+			<div class="card full" in:fly={rise(6)}>
 				<div class="siphead">
 					<h2>Transactions</h2>
 					{#if txnData && txnData.transactions.length}
@@ -437,5 +558,178 @@
 	}
 	.txntype.redeem {
 		color: var(--outflow);
+	}
+
+	/* ── Monte Carlo risk analysis card ── */
+	.h2icon {
+		display: inline-flex;
+		vertical-align: -2px;
+		margin-right: 6px;
+		color: var(--brand);
+	}
+	.simbadge {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 12px;
+		color: var(--ink-soft, var(--muted, #6b6b6b));
+		font-variant-numeric: tabular-nums;
+		border: 1px solid var(--rule);
+		padding: 3px 8px;
+		border-radius: 3px;
+		background: var(--card);
+	}
+	.simbadge b {
+		color: var(--brand-strong);
+	}
+	.simloading {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.simloading :global(svg) {
+		animation: pulse 1.1s ease-in-out infinite;
+	}
+	@keyframes pulse {
+		0%, 100% { opacity: 0.4; }
+		50% { opacity: 1; }
+	}
+	.verdict {
+		display: flex;
+		align-items: flex-start;
+		gap: 9px;
+		padding: 11px 13px;
+		border: 1px solid var(--rule);
+		border-left-width: 3px;
+		background: var(--card);
+		font-size: 14px;
+		line-height: 1.45;
+		margin-bottom: 16px;
+	}
+	.verdict :global(svg) {
+		flex: none;
+		margin-top: 2px;
+	}
+	.verdict.crit {
+		border-left-color: var(--outflow);
+		color: var(--outflow);
+	}
+	.verdict.good {
+		border-left-color: var(--inflow);
+		color: var(--inflow);
+	}
+	.verdict b {
+		font-weight: 700;
+	}
+	.stats {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+		gap: 14px;
+	}
+	.stat {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		border: 1px solid var(--rule);
+		padding: 12px 14px;
+		background: var(--card);
+	}
+	.slabel {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 12px;
+		color: var(--muted, #6b6b6b);
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+	}
+	.sval {
+		font-family: var(--font-serif);
+		font-weight: 700;
+		font-size: 26px;
+		font-variant-numeric: tabular-nums;
+		line-height: 1.1;
+	}
+	.sval.good { color: var(--inflow); }
+	.sval.watch { color: var(--warn, #b8860b); }
+	.sval.crit { color: var(--outflow); }
+	.ssuffix {
+		font-size: 15px;
+		font-weight: 400;
+		color: var(--muted, #6b6b6b);
+	}
+	.ssub {
+		font-size: 12px;
+		color: var(--muted, #6b6b6b);
+	}
+
+	/* ── Per-goal Monte Carlo block ── */
+	.goalmc {
+		margin-top: 12px;
+		padding-top: 11px;
+		border-top: 1px dashed var(--rule);
+	}
+	.probrow {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		margin-bottom: 5px;
+	}
+	.problabel {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 12px;
+		color: var(--muted, #6b6b6b);
+	}
+	.probval {
+		font-family: var(--font-serif);
+		font-weight: 700;
+		font-size: 15px;
+		font-variant-numeric: tabular-nums;
+	}
+	.probval.good { color: var(--inflow); }
+	.probval.watch { color: var(--warn, #b8860b); }
+	.probval.crit { color: var(--outflow); }
+	.probbar {
+		position: relative;
+		height: 7px;
+		background: var(--primary-200);
+		border: 1px solid var(--primary-300);
+		overflow: hidden;
+	}
+	.probfill {
+		height: 100%;
+		transform-origin: left;
+		animation: growbar 620ms var(--ease-out) both;
+	}
+	.probfill.good { background: var(--inflow); }
+	.probfill.watch { background: var(--warn, #b8860b); }
+	.probfill.crit { background: var(--outflow); }
+	.probmark {
+		position: absolute;
+		top: -2px;
+		bottom: -2px;
+		width: 2px;
+		background: var(--ink, #333);
+		opacity: 0.55;
+	}
+	.mcnote {
+		font-size: 12.5px;
+		margin-top: 6px;
+	}
+	.mcnote.good { color: var(--inflow); }
+	.mcnote.crit { color: var(--outflow); }
+	.mcnote b { font-weight: 700; }
+	.skeleton {
+		opacity: 0.6;
+		animation: pulse 1.1s ease-in-out infinite;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.simloading :global(svg),
+		.probfill,
+		.skeleton {
+			animation: none;
+		}
 	}
 </style>

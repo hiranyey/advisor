@@ -11,12 +11,19 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import scheduler
-from app.api import book, clients
+from app.api import book, clients, conversations, copilot
+from app.db import Base, engine
+from app.models import CopilotConversation, CopilotMessage
 from app.tasks.refresh_navs import refresh_navs
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure the Copilot persistence tables exist (idempotent) so an already-seeded DB
+    # gains conversation history without a full reseed. seed.py create_all covers a fresh DB.
+    Base.metadata.create_all(
+        engine, tables=[CopilotConversation.__table__, CopilotMessage.__table__]
+    )
     scheduler.start()
     try:
         yield
@@ -37,6 +44,8 @@ app.add_middleware(
 
 app.include_router(clients.router)
 app.include_router(book.router)
+app.include_router(copilot.router)
+app.include_router(conversations.router)
 
 
 @app.get("/")

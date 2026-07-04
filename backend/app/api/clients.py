@@ -7,15 +7,27 @@ query for value-over-time). Nothing here writes.
 
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+import numpy as np
+
+from ..config import settings
 from ..db import get_session
+from ..engine import market, pipelines
+from ..engine.backend import BACKEND, timer
+from ..engine.categories import N_CATEGORIES
+from ..engine.loader import ClientState, GoalState, load_client_state
+from ..engine.montecarlo import simulate
 from ..schemas import (
     CategoryAllocation,
     ClientDetail,
+    ClientInsights,
     ClientRow,
+    GoalInsight,
     GoalOut,
     HoldingOut,
     HoldingsResponse,
@@ -24,6 +36,8 @@ from ..schemas import (
     TimePoint,
     TransactionOut,
     TransactionsResponse,
+    TxnCommitRequest,
+    TxnCommitResponse,
 )
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -31,6 +45,11 @@ router = APIRouter(prefix="/clients", tags=["clients"])
 # Concentration thresholds (IMPLEMENTATION.md §5, concentration_flags).
 FUND_CONCENTRATION = 0.25
 CATEGORY_CONCENTRATION = 0.40
+
+RISK_HORIZON_MONTHS = 12  # VaR/CVaR/drawdown are measured over one year (matches baseline)
+OFF_TRACK_PROB = 0.50  # a goal under this success probability is "off track"
+# required_sip runs ~20 bisection sims; cap paths so the live call stays snappy.
+REQUIRED_SIP_PATHS = 4000
 
 
 @router.get("", response_model=list[ClientRow])
@@ -353,3 +372,154 @@ def get_transactions(
         for r in rows
     ]
     return TransactionsResponse(client_id=client_id, transactions=transactions)
+
+
+@router.post("/{client_id}/transactions", response_model=TxnCommitResponse)
+def commit_transactions(
+    client_id: int, req: TxnCommitRequest, session: Session = Depends(get_session)
+) -> TxnCommitResponse:
+    """Commit advisor-confirmed rows to the ledger — the *write* half of the NL data-entry
+    flow (the Copilot's add_transactions only parses). Holdings re-derive automatically
+    from the `latest_holdings` view; nothing else is materialized."""
+    exists = session.execute(
+        text("select 1 from clients where id = :id"), {"id": client_id}
+    ).first()
+    if exists is None:
+        raise HTTPException(status_code=404, detail="client not found")
+    if not req.rows:
+        raise HTTPException(status_code=400, detail="no rows to commit")
+
+    ids: list[int] = []
+    for r in req.rows:
+        if r.type not in ("buy", "redeem"):
+            raise HTTPException(status_code=400, detail=f"bad transaction type: {r.type}")
+        fund_ok = session.execute(
+            text("select 1 from funds where id = :fid"), {"fid": r.fund_id}
+        ).first()
+        if fund_ok is None:
+            raise HTTPException(status_code=400, detail=f"unknown fund_id: {r.fund_id}")
+        new_id = session.execute(
+            text(
+                """
+                insert into transactions (client_id, fund_id, date, type, units, nav, amount)
+                values (:client_id, :fund_id, :date, :type, :units, :nav, :amount)
+                returning id
+                """
+            ),
+            {
+                "client_id": client_id, "fund_id": r.fund_id, "date": r.date,
+                "type": r.type, "units": r.units, "nav": r.nav, "amount": r.amount,
+            },
+        ).scalar_one()
+        ids.append(int(new_id))
+    session.commit()
+    return TxnCommitResponse(client_id=client_id, inserted=len(ids), transaction_ids=ids)
+
+
+# ── Deterministic insights (live single-client Monte Carlo) ────────────────────
+def _allocation_weights(*candidates: np.ndarray) -> np.ndarray:
+    """First non-empty 14-vector normalised to sum 1 — where new SIP money should go.
+
+    Prefer the goal's own holdings mix, then its SIP mix, then the client's whole book;
+    if everything is empty, spread evenly so `required_sip` still has somewhere to invest.
+    """
+    for vec in candidates:
+        total = float(vec.sum())
+        if total > 0:
+            return vec / total
+    return np.full(N_CATEGORIES, 1.0 / N_CATEGORIES)
+
+
+def _goal_insight(g: GoalState, model: market.MarketModel, client_holdings: np.ndarray,
+                  n_paths: int, seed: int, confidence: float) -> GoalInsight:
+    """Run one goal's sub-portfolio through the engine, then read the pipeline stats off it."""
+    terminals = simulate(
+        g.holdings, model.mu, model.L, g.monthly_sip, g.horizon_months,
+        n_paths=n_paths, seed=seed, stepup_rate=g.stepup_rate,
+    )
+    prob = pipelines.goal_probability(terminals, g.target_amount)
+    pcts = pipelines.percentiles(terminals)
+    sf = pipelines.shortfall(terminals, g.target_amount)
+    on_track = prob >= confidence
+
+    # For off-track goals, bisect the total monthly SIP that would reach the target.
+    required = None
+    if not on_track:
+        weights = _allocation_weights(g.holdings, g.monthly_sip, client_holdings)
+        required = pipelines.required_sip(
+            g.holdings, model.mu, model.L, g.target_amount, g.horizon_months, weights,
+            confidence=confidence, n_paths=REQUIRED_SIP_PATHS, seed=seed,
+            stepup_rate=g.stepup_rate,
+        )
+
+    return GoalInsight(
+        goal_id=g.goal_id, name=g.name, target_amount=g.target_amount,
+        horizon_months=g.horizon_months, funded_value=g.start_value,
+        success_prob=round(prob, 4),
+        p5=round(pcts["p5"]), p50=round(pcts["p50"]), p90=round(pcts["p90"]),
+        shortfall_expected=round(sf["expected"]), shortfall_worst=round(sf["worst_p5"]),
+        current_sip=float(g.monthly_sip.sum()),
+        required_sip=round(required) if required is not None else None,
+        on_track=on_track,
+    )
+
+
+@router.get("/{client_id}/insights", response_model=ClientInsights)
+def get_insights(
+    client_id: int, session: Session = Depends(get_session)
+) -> ClientInsights:
+    """Live Monte Carlo insights for one client: per-goal success probability, terminal
+    spread and required-SIP-to-get-on-track, plus 1-year portfolio downside (VaR/CVaR,
+    worst-case drawdown, suitability mismatch). The single-client hot path — re-simulated
+    on request through the same engine + pipeline stats the book analysis uses. The
+    reported `elapsed_ms` (and `backend`) is the GPU-vs-CPU pitch number."""
+    model = market.load_persisted(session) or market.resolve_market_model(session)
+    state = load_client_state(session, client_id, model)
+    if state is None:
+        raise HTTPException(status_code=404, detail="client not found")
+
+    n_paths, seed = settings.mc_n_paths, settings.mc_seed
+    confidence = settings.mc_confidence
+
+    with timer() as elapsed:
+        goals = [
+            _goal_insight(g, model, state.holdings, n_paths, seed, confidence)
+            for g in state.goals if g.target_amount > 0
+        ]
+
+        total = state.total
+        if total > 0:
+            risk_terminals = simulate(
+                state.holdings, model.mu, model.L, np.zeros(N_CATEGORIES),
+                RISK_HORIZON_MONTHS, n_paths=n_paths, seed=seed,
+            )
+            var, cvar = pipelines.var_cvar(risk_terminals, total)
+            drawdown = pipelines.simulated_drawdown(risk_terminals, total)
+        else:
+            var = cvar = drawdown = 0.0
+
+    mismatch = pipelines.suitability_mismatch(drawdown, state.risk_profile)
+    tolerable = pipelines.TOLERABLE_DD.get(state.risk_profile, pipelines.TOLERABLE_DD["balanced"])
+    flags = pipelines.concentration_flags(state.fund_value, state.category_value, total)
+    if any(not g.on_track for g in goals):
+        flags.append("off_track")
+
+    return ClientInsights(
+        client_id=client_id,
+        as_of_date=date.today(),
+        backend=BACKEND,
+        market_source=model.source,
+        n_paths=n_paths,
+        seed=seed,
+        elapsed_ms=round(elapsed() * 1000, 1),
+        confidence=confidence,
+        var_95=round(var, 4),
+        cvar_95=round(cvar, 4),
+        max_drawdown=round(drawdown, 4),
+        tolerable_dd=tolerable,
+        suitability_mismatch=round(mismatch, 4),
+        over_exposed=mismatch > 0,
+        risk_score=round(min(100.0, drawdown * 100)),
+        flags=flags,
+        goals=goals,
+    )

@@ -48,5 +48,14 @@ class Settings:
     mc_confidence: float = float(os.getenv("MC_CONFIDENCE", "0.80"))  # required-SIP target
     mc_var_pct: float = float(os.getenv("MC_VAR_PCT", "0.05"))  # tail percentile for VaR/CVaR
 
+    # LLM (Copilot). Gemini via pydantic-ai — the six-tool loop in app/llm/copilot.py.
+    # Any OpenAI-compatible / Google model works; the tool schemas are provider-agnostic.
+    llm_api_key: str | None = os.getenv("LLM_API_KEY") or os.getenv("GEMINI_API_KEY")
+    llm_model: str = os.getenv("LLM_MODEL", "gemini-3.5-flash")
+
+    @property
+    def llm_configured(self) -> bool:
+        return bool(self.llm_api_key)
+
 
 settings = Settings()

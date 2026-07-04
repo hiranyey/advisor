@@ -15,14 +15,48 @@ async function get(path, params) {
 	return res.json();
 }
 
+async function post(path, body) {
+	const res = await fetch(API_BASE + path, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body ?? {})
+	});
+	if (!res.ok) {
+		let detail = `${res.status} ${res.statusText}`;
+		try {
+			const j = await res.json();
+			if (j?.detail) detail = j.detail;
+		} catch {
+			/* non-JSON error body */
+		}
+		throw new Error(detail);
+	}
+	return res.json();
+}
+
+async function del(path) {
+	const res = await fetch(API_BASE + path, { method: 'DELETE' });
+	if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${path}`);
+	return res.json();
+}
+
 export const api = {
 	listClients: (params) => get('/clients', params),
 	getClient: (id) => get(`/clients/${id}`),
 	getHoldings: (id) => get(`/clients/${id}/holdings`),
 	getSips: (id) => get(`/clients/${id}/sips`),
 	getTransactions: (id) => get(`/clients/${id}/transactions`),
+	getInsights: (id) => get(`/clients/${id}/insights`),
 	bookSummary: () => get('/book/summary'),
-	bookRadar: () => get('/book/radar')
+	bookRadar: () => get('/book/radar'),
+	// Copilot: one message in, narrated answer + visible tool-call trace out.
+	copilot: (body) => post('/copilot', body),
+	// Commit half of the NL data-entry flow (add_transactions only parses).
+	commitTransactions: (id, rows) => post(`/clients/${id}/transactions`, { rows }),
+	// DB-backed conversation history.
+	listConversations: () => get('/conversations'),
+	getConversation: (id) => get(`/conversations/${id}`),
+	deleteConversation: (id) => del(`/conversations/${id}`)
 };
 
 // ── Formatting ────────────────────────────────────────────────────────────────

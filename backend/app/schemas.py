@@ -9,7 +9,8 @@ here touches the MC engine or LLM — pure reads over the seeded tables and the
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -111,6 +112,45 @@ class HoldingsResponse(BaseModel):
     value_over_time: list[TimePoint]
 
 
+# ── Client insights (live single-client Monte Carlo) ──────────────────────────
+class GoalInsight(BaseModel):
+    goal_id: int
+    name: str | None
+    target_amount: float
+    horizon_months: int
+    funded_value: float  # start value of the goal's tagged holdings
+    success_prob: float  # share of futures that reach the target
+    p5: float  # worst-case terminal value
+    p50: float  # median terminal value
+    p90: float  # optimistic terminal value
+    shortfall_expected: float  # avg ₹ gap to target
+    shortfall_worst: float  # P5 ₹ gap to target
+    current_sip: float  # this goal's current total monthly SIP
+    required_sip: float | None  # total monthly SIP to reach the confidence target
+    on_track: bool  # success_prob >= confidence target
+
+
+class ClientInsights(BaseModel):
+    client_id: int
+    as_of_date: date
+    backend: str  # 'numpy (CPU)' | 'cupy (GPU)'
+    market_source: str  # 'derived' | 'fallback' | 'persisted'
+    n_paths: int
+    seed: int
+    elapsed_ms: float  # simulation wall-time — the GPU-vs-CPU pitch number
+    confidence: float  # the required-SIP / on-track target (e.g. 0.80)
+    # Portfolio risk (1-year, current holdings, no new SIP) — positive loss magnitudes
+    var_95: float
+    cvar_95: float
+    max_drawdown: float  # worst-case (P-tail) loss magnitude
+    tolerable_dd: float  # what the risk profile tolerates
+    suitability_mismatch: float  # simulated − tolerable (>0 = over-exposed)
+    over_exposed: bool
+    risk_score: int  # 0..100
+    flags: list[str]  # concentration + off_track
+    goals: list[GoalInsight]
+
+
 # ── Book analytics ────────────────────────────────────────────────────────────
 class RiskProfileCount(BaseModel):
     conservative: int = 0
@@ -182,3 +222,81 @@ class RadarResponse(BaseModel):
     heatmap: list[HeatmapRow]
     goal_success_hist: list[HistBucket]
     call_list: list[RadarCallRow]
+
+
+# ── Copilot (six-tool LLM loop) ───────────────────────────────────────────────
+class ChatTurn(BaseModel):
+    role: str  # 'user' | 'assistant'
+    content: str
+
+
+class CopilotRequest(BaseModel):
+    message: str  # the text sent to the model (mentions rewritten to "Name (client id N)")
+    display_message: str | None = None  # what the advisor typed (@Name); shown on reload
+    history: list[ChatTurn] = []  # ignored when conversation_id is set (DB is authoritative)
+    client_id: int | None = None  # optional: the client the advisor is viewing
+    conversation_id: int | None = None  # append to this chat; omit to start a new one
+
+
+class ToolTrace(BaseModel):
+    """One visible tool call: what the model invoked, with what args, and what came back.
+    `result` is the raw tool payload the frontend renders as a card."""
+
+    tool: str
+    args: dict[str, Any] = {}
+    result: Any = None
+
+
+class CopilotResponse(BaseModel):
+    answer: str  # the model's narrated, advisor-ready reply
+    trace: list[ToolTrace]  # ordered tool-call trace (rendered inline)
+    elapsed_ms: float  # end-to-end turn wall-time
+    backend: str  # 'numpy (CPU)' | 'cupy (GPU)'
+    conversation_id: int  # the chat this turn was persisted to
+
+
+# ── Conversation history (DB-backed Copilot chats) ────────────────────────────
+class ConversationRow(BaseModel):
+    """One row in the history sidebar."""
+
+    id: int
+    title: str
+    client_id: int | None
+    message_count: int
+    updated_at: datetime
+
+
+class ConversationMessage(BaseModel):
+    role: str  # 'user' | 'assistant'
+    content: str | None
+    trace: list[ToolTrace] = []
+    backend: str | None = None
+    elapsed_ms: float | None = None
+    error: bool = False
+
+
+class ConversationDetail(BaseModel):
+    id: int
+    title: str
+    client_id: int | None
+    messages: list[ConversationMessage]
+
+
+# ── Transaction commit (confirm half of the NL data-entry flow) ───────────────
+class TxnCommitRow(BaseModel):
+    fund_id: int
+    type: str  # 'buy' | 'redeem'
+    date: date
+    units: float
+    nav: float
+    amount: float
+
+
+class TxnCommitRequest(BaseModel):
+    rows: list[TxnCommitRow]
+
+
+class TxnCommitResponse(BaseModel):
+    client_id: int
+    inserted: int
+    transaction_ids: list[int]

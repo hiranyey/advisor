@@ -246,6 +246,66 @@ class RadarOutput(Base):
     )
 
 
+# ── Copilot chat persistence ──────────────────────────────────────────────────
+class CopilotConversation(Base):
+    """One Copilot conversation (a chat session). Messages hang off it in order; the
+    title is derived from the first user turn. `client_id` is set when the chat was
+    scoped to a client, else null (book-wide)."""
+
+    __tablename__ = "copilot_conversations"
+    __table_args__ = (
+        Index("ix_copilot_conversations_updated", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String, nullable=False, default="New conversation")
+    client_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("clients.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    messages: Mapped[list["CopilotMessage"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan",
+        order_by="CopilotMessage.id",
+    )
+
+
+class CopilotMessage(Base):
+    """One turn in a conversation. Assistant turns carry the full visible tool-call
+    `trace` (the same [{tool, args, result}] the frontend renders) plus the GPU/CPU
+    timing, so a reloaded conversation re-renders exactly as it first appeared. User
+    turns keep `sent` — the id-rewritten text (@Name → "Name (client id N)") fed to
+    the model — so replayed history stays id-accurate."""
+
+    __tablename__ = "copilot_messages"
+    __table_args__ = (
+        CheckConstraint("role in ('user','assistant')", name="copilot_messages_role_check"),
+        Index("ix_copilot_messages_conversation", "conversation_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("copilot_conversations.id", ondelete="CASCADE")
+    )
+    role: Mapped[str] = mapped_column(String, nullable=False)
+    content: Mapped[Optional[str]] = mapped_column(String)  # display text (raw for user)
+    sent: Mapped[Optional[str]] = mapped_column(String)  # id-rewritten text (user turns)
+    trace: Mapped[Optional[list]] = mapped_column(JSONB)  # [{tool, args, result}] (assistant)
+    backend: Mapped[Optional[str]] = mapped_column(String)  # 'numpy (CPU)' | 'cupy (GPU)'
+    elapsed_ms: Mapped[Optional[float]] = mapped_column(Numeric)
+    error: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    conversation: Mapped["CopilotConversation"] = relationship(back_populates="messages")
+
+
 # ── Derived holdings view (never materialized) ────────────────────────────────
 # Net units × latest NAV per (client, fund), rolled up with the fund's category.
 LATEST_HOLDINGS_VIEW = """
