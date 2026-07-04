@@ -1,1 +1,391 @@
 @import 'tailwindcss';
+
+/* ── AdvisorOS design system — warm-gold ledger (see frontend/mockups/design.md) ── */
+:root {
+	--primary-50: #fefdf4;
+	--primary-100: #fef9e7;
+	--primary-200: #fdf0c4;
+	--primary-300: #fbe497;
+	--primary-600: #d4a017;
+	--primary-700: #b8860b;
+	--primary-800: #96690a;
+	--primary-900: #6b4a08;
+	--inflow: #4a7c3a;
+	--inflow-soft: #c9deb0;
+	--outflow: #a8224a;
+	--outflow-soft: #f4b8c6;
+	--secondary-700: #a8224a;
+
+	--paper: var(--primary-50);
+	--card: var(--primary-50);
+	--card-2: var(--primary-100);
+	--ink: var(--primary-900);
+	--ink-2: var(--primary-800);
+	--mut: var(--primary-700);
+	--faint: var(--primary-600);
+	--rule: var(--primary-300);
+	--rule-2: var(--primary-200);
+	--brand: var(--primary-700);
+	--brand-strong: var(--primary-800);
+	--on-brand: var(--primary-50);
+
+	--stamp-color: 107 74 8;
+	--font-serif: 'Playfair Display', Georgia, serif;
+	--font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+	--shadow-stamp-sm: 3px 3px 0 0 rgb(var(--stamp-color));
+	--shadow-stamp: 4px 4px 0 0 rgb(var(--stamp-color));
+	--shadow-stamp-lg: 6px 6px 0 0 rgb(var(--stamp-color));
+	--shadow-stamp-xl: 10px 10px 0 0 rgb(var(--stamp-color));
+	--ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	color: var(--ink);
+	font-family: var(--font-sans);
+	font-size: 16px;
+	line-height: 1.6;
+	-webkit-font-smoothing: antialiased;
+	background:
+		repeating-linear-gradient(0deg, rgba(107, 74, 8, 0.04) 0 1px, transparent 1px 6px),
+		linear-gradient(180deg, var(--primary-100) 0%, var(--primary-200) 100%) fixed;
+	min-height: 100vh;
+}
+
+a {
+	color: inherit;
+}
+
+.num {
+	font-variant-numeric: tabular-nums;
+}
+
+/* ── Page scaffolding ── */
+.page {
+	max-width: 1480px;
+	margin: 0 auto;
+	padding: 20px 40px 70px;
+}
+.eyebrow {
+	font-family: var(--font-sans);
+	font-weight: 600;
+	letter-spacing: 0.3em;
+	text-transform: uppercase;
+	font-size: 11px;
+	color: var(--brand);
+	margin: 14px 0 10px;
+}
+h1.title {
+	font-family: var(--font-serif);
+	font-weight: 900;
+	color: var(--ink);
+	font-size: clamp(40px, 6vw, 74px);
+	line-height: 0.9;
+	letter-spacing: -0.01em;
+	margin: 0;
+	text-wrap: balance;
+}
+/* Title row: lucide icon + serif headline */
+.titlewrap {
+	display: flex;
+	align-items: center;
+	gap: 18px;
+}
+.titleicon {
+	color: var(--brand);
+	display: flex;
+	flex: none;
+}
+.titlerule {
+	height: 3px;
+	border-top: 3px double var(--primary-900);
+	margin: 20px 0 20px;
+}
+.runline {
+	font-family: var(--font-sans);
+	font-size: 12px;
+	color: var(--mut);
+	margin: 0 0 26px;
+	display: flex;
+	gap: 16px;
+	flex-wrap: wrap;
+	align-items: center;
+	font-weight: 500;
+}
+.runline b {
+	color: var(--inflow);
+	font-weight: 700;
+}
+.runline .slow {
+	color: var(--faint);
+}
+.dot {
+	width: 8px;
+	height: 8px;
+	background: var(--inflow);
+	display: inline-block;
+	animation: pulse 2.4s infinite;
+}
+@keyframes pulse {
+	0% {
+		box-shadow: 0 0 0 0 rgba(74, 124, 58, 0.5);
+	}
+	70% {
+		box-shadow: 0 0 0 7px rgba(74, 124, 58, 0);
+	}
+	100% {
+		box-shadow: 0 0 0 0 rgba(74, 124, 58, 0);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.dot {
+		animation: none;
+	}
+}
+
+/* ── Card ── */
+.card {
+	background: var(--card);
+	border: 1.5px solid var(--primary-800);
+	padding: 20px 22px 22px;
+	box-shadow: var(--shadow-stamp-lg);
+	position: relative;
+}
+.card h2 {
+	font-family: var(--font-serif);
+	font-style: italic;
+	font-weight: 500;
+	font-size: 23px;
+	color: var(--ink);
+	margin: 0 0 3px;
+	letter-spacing: -0.01em;
+}
+.card .h2sub {
+	color: var(--mut);
+	font-size: 13px;
+	margin: 0 0 16px;
+}
+.card .h2rule {
+	height: 1px;
+	background: var(--primary-300);
+	margin: 10px 0 16px;
+}
+
+/* ── KPI tiles ── */
+.kpis {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 22px;
+	margin-bottom: 26px;
+}
+@media (max-width: 820px) {
+	.kpis {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+.kpi {
+	background: var(--card);
+	border: 1.5px solid var(--primary-800);
+	box-shadow: var(--shadow-stamp-lg);
+	padding: 16px 18px;
+	border-left-width: 5px;
+}
+.kpi.crit {
+	border-left-color: var(--outflow);
+}
+.kpi.warn {
+	border-left-color: var(--primary-600);
+}
+.kpi.good {
+	border-left-color: var(--inflow);
+}
+.kpi.ink {
+	border-left-color: var(--primary-900);
+}
+.kpi .lab {
+	font-family: var(--font-sans);
+	font-size: 10px;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	color: var(--mut);
+	font-weight: 600;
+}
+.kpi .val {
+	font-family: var(--font-serif);
+	font-size: 38px;
+	font-weight: 800;
+	margin-top: 6px;
+	font-variant-numeric: tabular-nums;
+	line-height: 1;
+}
+.kpi .val.crit {
+	color: var(--outflow);
+}
+.kpi .val.good {
+	color: var(--inflow);
+}
+.kpi .val.warn {
+	color: var(--primary-700);
+}
+.kpi .foot {
+	font-size: 12px;
+	color: var(--faint);
+	margin-top: 5px;
+}
+
+/* ── Grid helpers ── */
+.grid {
+	display: grid;
+	grid-template-columns: 1.35fr 1fr;
+	gap: 22px;
+}
+@media (max-width: 900px) {
+	.grid {
+		grid-template-columns: 1fr;
+	}
+}
+.full {
+	grid-column: 1 / -1;
+}
+
+/* ── Tables ── */
+table {
+	width: 100%;
+	border-collapse: collapse;
+}
+th {
+	font-family: var(--font-sans);
+	font-size: 10px;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--mut);
+	text-align: left;
+	padding: 0 8px 12px;
+	font-weight: 600;
+}
+td {
+	padding: 12px 8px;
+	border-top: 1px solid var(--primary-200);
+	font-size: 15px;
+	transition: background-color 120ms ease;
+}
+tr:hover td {
+	background: var(--card-2);
+}
+td.name {
+	font-family: var(--font-serif);
+	font-weight: 700;
+	font-size: 16px;
+	color: var(--ink);
+}
+td.r,
+th.r {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+/* ── Pills / badges ── */
+.pill {
+	font-family: var(--font-sans);
+	font-size: 10.5px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	padding: 3px 9px;
+	white-space: nowrap;
+	display: inline-block;
+}
+.pill.pillicon {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+}
+.pill.crit {
+	background: var(--outflow-soft);
+	color: var(--secondary-700);
+}
+.pill.warn {
+	background: rgba(184, 134, 11, 0.16);
+	color: var(--primary-800);
+}
+.pill.good {
+	background: var(--inflow-soft);
+	color: var(--inflow);
+}
+.pill.neutral {
+	background: var(--card-2);
+	color: var(--mut);
+	border: 1px solid var(--primary-300);
+}
+
+/* ── Allocation bar (category roll-up) ── */
+.allocbar {
+	display: flex;
+	height: 14px;
+	width: 100%;
+	border: 1.5px solid var(--primary-800);
+	overflow: hidden;
+}
+.allocrow {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 7px 0;
+	border-top: 1px solid var(--primary-200);
+	font-size: 13px;
+}
+.allocrow .sw {
+	width: 12px;
+	height: 12px;
+	flex: none;
+	border: 1px solid rgba(107, 74, 8, 0.35);
+}
+.allocrow .ci {
+	flex: none;
+	display: flex;
+	align-items: center;
+}
+.allocrow .cn {
+	flex: 1;
+	color: var(--ink-2);
+}
+.allocrow .cv {
+	color: var(--faint);
+	font-variant-numeric: tabular-nums;
+}
+.allocrow .cp {
+	width: 52px;
+	text-align: right;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+/* ── Misc ── */
+.dim {
+	color: var(--faint);
+	font-size: 12px;
+}
+.mini {
+	color: var(--mut);
+	font-size: 13px;
+}
+.mini b {
+	color: var(--ink);
+}
+.rowlink {
+	cursor: pointer;
+}
+.loading,
+.errbox {
+	font-family: var(--font-sans);
+	color: var(--mut);
+	padding: 40px 0;
+	font-size: 14px;
+}
+.errbox {
+	color: var(--secondary-700);
+}

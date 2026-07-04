@@ -8,8 +8,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import scheduler
+from app.api import book, clients
 from app.tasks.refresh_navs import refresh_navs
 
 
@@ -22,7 +24,19 @@ async def lifespan(app: FastAPI):
         scheduler.shutdown()
 
 
-app = FastAPI(title="AdvisorOS", lifespan=lifespan,root_path="/api")
+app = FastAPI(title="AdvisorOS", lifespan=lifespan, root_path="/api")
+
+# Allow the SvelteKit dev server (and any local origin) to call the API.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(clients.router)
+app.include_router(book.router)
 
 
 @app.get("/")

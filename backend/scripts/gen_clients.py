@@ -31,22 +31,61 @@ from app.db import SessionLocal
 from app.models import Client, Goal, GoalHolding, SipSchedule, Transaction
 
 SEED = 42
-N_CLIENTS = 150
+N_CLIENTS = 173
 BASE_DATE = date(2026, 7, 4)  # fixed "today" for reproducibility
 PER_CATEGORY = 15             # funds sampled into the investable universe per category
 MIN_HISTORY_DAYS = 500        # need ~2y of NAVs so back-dated buys can be priced
+MIN_WEIGHT = 0.05             # a fund below this share of the book is merged away as dust
 
 # ── Names ─────────────────────────────────────────────────────────────────────
+# Deliberately large + regionally diverse so 150 clients read as distinct people.
+# Full names are de-duplicated at generation time (see generate()), so no two
+# clients share a name even when a first or last name recurs.
 FIRST = [
-    "Aarav", "Vivaan", "Aditya", "Vihaan", "Arjun", "Sai", "Reyansh", "Krishna",
-    "Ishaan", "Rahul", "Rohan", "Kabir", "Ananya", "Diya", "Aadhya", "Saanvi",
-    "Aanya", "Pari", "Anika", "Navya", "Meera", "Priya", "Neha", "Kavya",
-    "Riya", "Ishita", "Nikhil", "Karan", "Varun", "Siddharth", "Ayaan", "Dev",
+    # younger / modern
+    "Aarav", "Vivaan", "Aditya", "Vihaan", "Arjun", "Reyansh", "Krishna", "Ishaan",
+    "Aryan", "Kabir", "Ayaan", "Shaurya", "Advik", "Rudra", "Ved", "Aarush",
+    "Sarthak", "Rishabh", "Parth", "Tanish", "Neel", "Om", "Laksh", "Kian",
+    "Ananya", "Diya", "Aadhya", "Saanvi", "Aanya", "Anika", "Navya", "Kavya",
+    "Ishita", "Aarohi", "Myra", "Kiara", "Nitya", "Anvi", "Prisha", "Ira",
+    "Aditi", "Shreya", "Riya", "Meera", "Pari", "Zara", "Tara", "Saira",
+    # working-age / mature (clients run to 68)
+    "Rahul", "Rohan", "Nikhil", "Karan", "Varun", "Siddharth", "Kunal", "Manav",
+    "Yash", "Harsh", "Ronit", "Gaurav", "Pranav", "Aniket", "Rajat", "Nishant",
+    "Rajesh", "Suresh", "Ramesh", "Mahesh", "Anil", "Sunil", "Vijay", "Ajay",
+    "Sanjay", "Deepak", "Ashok", "Vikram", "Naveen", "Arvind", "Prakash", "Girish",
+    "Priya", "Neha", "Pooja", "Divya", "Nisha", "Swati", "Anjali", "Kritika",
+    "Sneha", "Deepika", "Bhavana", "Shalini", "Sunita", "Geeta", "Rekha", "Kavita",
+    "Poonam", "Vidya", "Padma", "Latha", "Revathi", "Sowmya", "Anusha", "Lakshmi",
+    "Radha", "Sushma", "Meenakshi", "Sarita", "Usha", "Jaya",
 ]
 LAST = [
-    "Sharma", "Verma", "Gupta", "Iyer", "Nair", "Reddy", "Rao", "Menon",
-    "Patel", "Shah", "Mehta", "Desai", "Kulkarni", "Joshi", "Bose", "Chatterjee",
-    "Banerjee", "Kapoor", "Malhotra", "Chopra", "Sinha", "Pillai", "Naidu", "Das",
+    "Sharma", "Verma", "Gupta", "Agarwal", "Bansal", "Mittal", "Jain", "Saxena",
+    "Srivastava", "Tiwari", "Mishra", "Pandey", "Dubey", "Trivedi", "Chauhan", "Rathore",
+    "Iyer", "Nair", "Menon", "Pillai", "Reddy", "Rao", "Naidu", "Hegde",
+    "Shetty", "Bhat", "Kamath", "Prabhu", "Acharya", "Deshpande", "Gokhale", "Apte",
+    "Kulkarni", "Joshi", "Bhatt", "Patel", "Shah", "Mehta", "Desai", "Trivedy",
+    "Bose", "Chatterjee", "Banerjee", "Sen", "Ghosh", "Dutta", "Mukherjee", "Chakraborty",
+    "Kapoor", "Malhotra", "Chopra", "Sinha", "Das", "Gill", "Sethi", "Khanna",
+    "Bajaj", "Kohli", "Grewal", "Ahluwalia",
+]
+
+# Rarer, more distinctive names — classical, regional, or long compound surnames.
+# Used for a minority of clients (see _pick_name) so the pool has some texture.
+EXOTIC_FIRST = [
+    "Satyajit", "Chiranjeev", "Digvijay", "Yashwardhan", "Prithviraj", "Devdatta",
+    "Raghavendra", "Purushottam", "Shubhankar", "Tejaswin", "Anirudh", "Vishwanath",
+    "Chandrashekhar", "Bhargav", "Ratnakar", "Devansh", "Ojas", "Vedant",
+    "Yashodhara", "Damayanti", "Suhasini", "Padmavati", "Rukmini", "Chandrika",
+    "Anasuya", "Kadambari", "Malavika", "Vasundhara", "Indrani", "Shakuntala",
+    "Meghna", "Trishna", "Oorja", "Meenal", "Ahilya", "Sharmila",
+]
+EXOTIC_LAST = [
+    "Mukhopadhyay", "Bandyopadhyay", "Gangopadhyay", "Chattopadhyay", "Chowdhury",
+    "Deshmukh", "Gaikwad", "Bhonsle", "Sardesai", "Wadhwa",
+    "Ranganathan", "Venkataraman", "Krishnamurthy", "Subramanian", "Balasubramanian",
+    "Chidambaram", "Padmanabhan", "Thyagarajan", "Mahadevan", "Sreenivasan",
+    "Varghese", "Kurup", "Namboothiri", "Panicker", "Vishwanathan",
 ]
 
 # ── Investing styles: target category weights (normalized at pick time) ─────────
@@ -76,6 +115,11 @@ STYLE_ALLOCATIONS = {
         "silver": 0.05,
     },
 }
+
+# STYLE_ALLOCATIONS is authored safest→riskiest, so its key order IS the risk ladder.
+# A goal's time horizon nudges the client's style along it: money you need soon should
+# sit in safer funds, money you won't touch for decades can ride more risk.
+STYLE_LADDER = list(STYLE_ALLOCATIONS)
 
 # Per stated risk_profile, the mix of ACTUAL styles clients end up with.
 # The tails (e.g. conservative→very_aggressive) are the deliberate mismatches.
@@ -178,36 +222,141 @@ def _nav_on_or_before(series, fid, d):
     return ds[i], ns[i]
 
 
-def _pick_weights(rng: Random, style, universe, concentrated: bool):
+def _pick_weights(rng: Random, style, universe, exclude: set | None = None,
+                  max_funds: int | None = None):
     """Choose funds and their CURRENT-VALUE weights for a style. -> [(fund_id, weight)].
 
     A heavy category (>18% target) is spread across two distinct funds so ordinary
     portfolios don't trip the single-fund concentration flag — that flag is reserved
-    for the deliberately `concentrated` archetype below."""
+    for the deliberately `concentrated` archetype (applied at portfolio level).
+
+    `exclude` holds fund_ids already tagged to another of this client's goals; a fund
+    tags at most one goal (goal_holdings PK), so we never reuse one across goals.
+
+    `max_funds` caps the fund count so a small goal isn't sprayed across the whole
+    style (which would make each fund a sub-5% sliver); we keep the largest few and
+    renormalize."""
+    exclude = exclude or set()
     alloc = STYLE_ALLOCATIONS[style]
     picks = []
     for cat, w in alloc.items():
-        pool = universe.get(cat)
+        pool = [f for f in universe.get(cat, []) if f[0] not in exclude]
         if not pool:
             continue
-        if w > 0.18 and len(pool) >= 2:
+        if w > 0.18 and len(pool) >= 2 and (max_funds is None or max_funds >= 4):
             f1, f2 = rng.sample(pool, 2)
             split = rng.uniform(0.4, 0.6)
             picks.append([f1[0], w * split])
             picks.append([f2[0], w * (1 - split)])
         else:
             picks.append([rng.choice(pool)[0], w])
+    if max_funds is not None and len(picks) > max_funds:
+        picks.sort(key=lambda x: x[1], reverse=True)
+        picks = picks[:max_funds]
     total = sum(w for _, w in picks) or 1.0
-    picks = [[fid, w / total] for fid, w in picks]
+    return [(fid, w / total) for fid, w in picks]
 
-    if concentrated and picks:
-        i = rng.randrange(len(picks))
-        big = rng.uniform(0.55, 0.72)
-        others = [j for j in range(len(picks)) if j != i]
-        rest_src = sum(picks[j][1] for j in others) or 1.0
-        for j in range(len(picks)):
-            picks[j][1] = big if j == i else picks[j][1] / rest_src * (1 - big)
-    return [(fid, w) for fid, w in picks]
+
+def _pick_name(rng: Random, seen: set) -> str:
+    """A unique full name. ~14% of clients draw from the rarer EXOTIC pools so the
+    book isn't all common names — a few classical / regional / compound-surname folks."""
+    while True:
+        if rng.random() < 0.14:
+            name = f"{rng.choice(EXOTIC_FIRST)} {rng.choice(EXOTIC_LAST)}"
+        else:
+            name = f"{rng.choice(FIRST)} {rng.choice(LAST)}"
+        if name not in seen:
+            seen.add(name)
+            return name
+
+
+def _goal_style(rng: Random, base_style: str, years: float) -> str:
+    """Tilt a client's style by a goal's time horizon, then return the goal's style.
+
+    Near-term money (an emergency fund, a car in 2 years) is pulled toward safety;
+    a retirement 20 years out is allowed to ride more risk. About 1 in 8 goals ignores
+    the horizon (a short goal left in equity, a long goal parked in debt) — the "for no
+    reason" mismatches the Book Risk Radar is meant to surface."""
+    idx = STYLE_LADDER.index(base_style)
+    if years <= 3:
+        shift = -2          # emergency / very short → markedly safer
+    elif years <= 7:
+        shift = -1          # short–medium → a notch safer
+    elif years <= 12:
+        shift = 0           # medium → as-is
+    else:
+        shift = +1          # long horizon → can lean riskier
+    if rng.random() < 0.12:
+        shift = rng.choice([-2, -1, 1, 2])  # deliberate horizon-blind mismatch
+    idx = max(0, min(len(STYLE_LADDER) - 1, idx + shift))
+    return STYLE_LADDER[idx]
+
+
+def _draw_progress(rng: Random) -> float:
+    """How funded a goal is *today*, as a fraction of its target. Drawn per goal.
+
+    Heavily weighted toward partial funding — a goal is meant to be a work in
+    progress the Monte Carlo engine projects forward, not an already-solved sum.
+    Only ~3% land ahead of target (>1.05). Because each of a client's goals draws
+    independently, a client whose *every* goal is already met is genuinely rare."""
+    r = rng.random()
+    if r < 0.35:
+        return rng.uniform(0.05, 0.25)   # just getting started
+    if r < 0.70:
+        return rng.uniform(0.25, 0.55)   # underway
+    if r < 0.88:
+        return rng.uniform(0.55, 0.85)   # well along
+    if r < 0.97:
+        return rng.uniform(0.85, 1.05)   # nearly / just there
+    return rng.uniform(1.05, 1.45)       # ahead of schedule (rare)
+
+
+def _portfolio_cap(age: int | None) -> float | None:
+    """Age-appropriate ceiling on total current portfolio value (₹), or None.
+
+    Wealth accumulates with a career, so a 26-year-old holding ₹3Cr reads as fake.
+    Younger clients are capped hard: nobody under 35 exceeds ₹1Cr."""
+    if age is None:
+        return None
+    if age < 30:
+        return 4.0e6    # ₹40L
+    if age < 35:
+        return 1.0e7    # ₹1Cr
+    if age < 45:
+        return 3.0e7    # ₹3Cr
+    return None         # established investors: goal targets alone bound it
+
+
+def _merge_dust(holdings, floor: float = MIN_WEIGHT):
+    """Merge away dust holdings so each fund is a meaningful slice of the book.
+
+    Building per-goal across a style's many categories can leave a client holding
+    20+ funds at <1% each — noise that also spawns pointless SIPs. Within each goal
+    we fold sub-`floor` funds proportionally into that goal's larger funds, so the
+    goal's funded value is unchanged. A goal whose *entire* budget is below the floor
+    keeps just its single largest fund — a genuine outlier, not the norm.
+
+    holdings: [[fund_id, goal, value], ...]. Returns the pruned list."""
+    total = sum(h[2] for h in holdings)
+    if total <= 0:
+        return holdings
+    # Small margin so survivors clear the floor cleanly rather than landing on it
+    # (float drift from redistribution/scaling would otherwise dip them just under).
+    cutoff = floor * 1.05 * total
+    by_goal = defaultdict(list)
+    for h in holdings:
+        by_goal[h[1]].append(h)  # goal object, hashable by identity
+    kept = []
+    for group in by_goal.values():
+        group.sort(key=lambda h: h[2])
+        while len(group) > 1 and group[0][2] < cutoff:
+            dust = group.pop(0)
+            rest_sum = sum(h[2] for h in group) or 1.0
+            for h in group:
+                h[2] += dust[2] * h[2] / rest_sum
+            group.sort(key=lambda h: h[2])
+        kept.extend(group)
+    return kept
 
 
 def _make_buys(rng: Random, series, fid, target_value):
@@ -279,29 +428,85 @@ def generate(session=None) -> dict:
         with raw.cursor() as cur:
             universe, series = build_universe(cur, rng)
 
+        seen_names: set[str] = set()
+
         for i in range(N_CLIENTS):
             profile, style, concentrated = _client_plan(rng, i, universe)
 
-            client = Client(
-                name=f"{rng.choice(FIRST)} {rng.choice(LAST)}",
-                age=rng.randint(24, 68),
-                risk_profile=profile,
-            )
+            name = _pick_name(rng, seen_names)
+            age = rng.randint(24, 68)
+            client = Client(name=name, age=age, risk_profile=profile)
             session.add(client)
 
             goals_spec = _make_goals(rng)
             goal_objs = []
-            for name, amount, target in goals_spec:
-                g = Goal(client=client, name=name, target_amount=amount, target_date=target)
+            for gname, amount, target in goals_spec:
+                g = Goal(client=client, name=gname, target_amount=amount, target_date=target)
                 session.add(g)
                 goal_objs.append(g)
 
-            weights = _pick_weights(rng, style, universe, concentrated)
-            portfolio_value = 10 ** rng.uniform(5.3, 7.7)  # ~₹2L – ₹5Cr, log-uniform
+            # ── Portfolio is DERIVED from the goals ────────────────────────────
+            # Each goal is funded to a random fraction of its target (mostly
+            # partial), and only the funds bought *for* that goal are tagged to it.
+            # So funded_value/target reads as real progress, and total portfolio
+            # value falls out of the goals instead of being an unrelated number.
+            # Per-goal current funding = target × progress. Then lift any goal that
+            # would sit below the book's 5% dust floor up to that floor — but never
+            # above its own target — so a goal only yields a sub-5% sliver when the
+            # goal itself is that small next to its siblings (a rare true outlier).
+            budgets = [float(amount) * _draw_progress(rng) for _, amount, _ in goals_spec]
+            caps = [float(amount) for _, amount, _ in goals_spec]  # never fund past target
+            # Iterate: lifting a goal to the 5% floor raises the book, which raises the
+            # floor — a few passes converge so every liftable goal truly clears 5%.
+            for _ in range(4):
+                book = sum(budgets) or 1.0
+                budgets = [max(b, min(MIN_WEIGHT * book, cap))
+                           for b, cap in zip(budgets, caps)]
 
-            for idx, (fid, w) in enumerate(weights):
-                target_value = portfolio_value * w
-                for nav_date, units, nav, amount in _make_buys(rng, series, fid, target_value):
+            total_budget = sum(budgets) or 1.0
+            holdings: list[list] = []  # [fund_id, goal_obj, current_value]
+            used_funds: set[int] = set()
+            for goal, budget, (_, _, target) in zip(goal_objs, budgets, goals_spec):
+                # Fund category follows the goal's horizon, not just the client's style:
+                # short-dated goals lean safe, long-dated goals can lean risky.
+                years = (target - BASE_DATE).days / 365.0
+                goal_style = _goal_style(rng, style, years)
+                # Cap funds per goal so each is a real slice. We size against a target
+                # weight above the 5% floor (funds within a goal are unevenly weighted,
+                # so the *smallest* needs headroom to still clear the floor).
+                max_funds = max(1, int((budget / total_budget) / (MIN_WEIGHT * 1.5)))
+                for fid, w in _pick_weights(rng, goal_style, universe,
+                                            exclude=used_funds, max_funds=max_funds):
+                    used_funds.add(fid)
+                    holdings.append([fid, goal, budget * w])
+
+            # Merge dust: fold sub-5% funds into larger siblings of the same goal, so
+            # a client holds a handful of meaningful funds (and SIPs) rather than 20+.
+            holdings = _merge_dust(holdings)
+
+            # Age-appropriate ceiling: scale the whole book down if the goal-derived
+            # value outruns what someone this age would plausibly have accumulated.
+            cap = _portfolio_cap(age)
+            if cap is not None and holdings:
+                total = sum(h[2] for h in holdings)
+                if total > cap:
+                    scale = cap * rng.uniform(0.6, 0.95) / total
+                    for h in holdings:
+                        h[2] *= scale
+
+            # Concentration archetype: one fund dominates the WHOLE portfolio.
+            if concentrated and holdings:
+                total = sum(h[2] for h in holdings) or 1.0
+                big = rng.uniform(0.55, 0.72)
+                j = max(range(len(holdings)), key=lambda k: holdings[k][2])  # bloat the largest
+                rest = sum(holdings[k][2] for k in range(len(holdings)) if k != j) or 1.0
+                for k in range(len(holdings)):
+                    holdings[k][2] = total * (big if k == j else holdings[k][2] / rest * (1 - big))
+
+            for fid, goal, value in holdings:
+                if value <= 0:
+                    continue
+                for nav_date, units, nav, amount in _make_buys(rng, series, fid, value):
                     if units <= 0:
                         continue
                     session.add(Transaction(
@@ -310,8 +515,6 @@ def generate(session=None) -> dict:
                     ))
                     stats["transactions"] += 1
 
-                # Tag this fund to one of the client's goals (round-robin).
-                goal = goal_objs[idx % len(goal_objs)]
                 session.add(GoalHolding(client=client, fund_id=fid, goal=goal))
                 stats["goal_holdings"] += 1
 
