@@ -6,7 +6,10 @@ Transactions are the source of truth; holdings are DERIVED via the latest_holdin
 view (never materialized). The engine's later phases add assumptions/covariances/caches.
 """
 
+from __future__ import annotations
+
 from datetime import date, datetime
+from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
@@ -19,8 +22,10 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -38,8 +43,8 @@ class Fund(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    amc: Mapped[str | None] = mapped_column(String)
-    scheme_code: Mapped[str | None] = mapped_column(String, unique=True, index=True)
+    amc: Mapped[Optional[str]] = mapped_column(String)
+    scheme_code: Mapped[Optional[str]] = mapped_column(String, unique=True, index=True)
     category: Mapped[str] = mapped_column(String, nullable=False)
 
     nav_history: Mapped[list["NavHistory"]] = relationship(
@@ -76,8 +81,8 @@ class Client(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    age: Mapped[int | None] = mapped_column(Integer)
-    risk_profile: Mapped[str | None] = mapped_column(String)
+    age: Mapped[Optional[int]] = mapped_column(Integer)
+    risk_profile: Mapped[Optional[str]] = mapped_column(String)
 
     goals: Mapped[list["Goal"]] = relationship(
         back_populates="client", cascade="all, delete-orphan"
@@ -100,9 +105,9 @@ class Goal(Base):
     client_id: Mapped[int] = mapped_column(
         ForeignKey("clients.id", ondelete="CASCADE"), index=True
     )
-    name: Mapped[str | None] = mapped_column(String)
-    target_amount: Mapped[float | None] = mapped_column(Numeric)  # ₹
-    target_date: Mapped[date | None] = mapped_column(Date)
+    name: Mapped[Optional[str]] = mapped_column(String)
+    target_amount: Mapped[Optional[float]] = mapped_column(Numeric)  # ₹
+    target_date: Mapped[Optional[date]] = mapped_column(Date)
 
     client: Mapped["Client"] = relationship(back_populates="goals")
     goal_holdings: Mapped[list["GoalHolding"]] = relationship(
@@ -147,7 +152,7 @@ class SipSchedule(Base):
     fund_id: Mapped[int] = mapped_column(ForeignKey("funds.id", ondelete="CASCADE"))
     monthly_amount: Mapped[float] = mapped_column(Numeric, nullable=False)  # ₹/month
     stepup_rate: Mapped[float] = mapped_column(Numeric, default=0)  # e.g. 0.10 = +10%/yr
-    start_date: Mapped[date | None] = mapped_column(Date)
+    start_date: Mapped[Optional[date]] = mapped_column(Date)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     client: Mapped["Client"] = relationship(back_populates="sips")
@@ -173,6 +178,74 @@ class GoalHolding(Base):
     goal: Mapped["Goal"] = relationship(back_populates="goal_holdings")
 
 
+# ── Market model (assumptions layer) ──────────────────────────────────────────
+class Assumption(Base):
+    """One row per CATEGORY. mu/sigma derived nightly from nav_history (GPU) or read
+    from the hardcoded fallback (CPU). Shared across all clients. See engine/market.py."""
+
+    __tablename__ = "assumptions"
+
+    category: Mapped[str] = mapped_column(String, primary_key=True)
+    mu: Mapped[Optional[float]] = mapped_column(Numeric)  # annual expected return
+    sigma: Mapped[Optional[float]] = mapped_column(Numeric)  # annual volatility
+
+
+class Covariance(Base):
+    """The 14×14 category covariance Σ, stored as (cat_a, cat_b) pairs. Reassembled into
+    a dense matrix and Cholesky-factored once at load time."""
+
+    __tablename__ = "covariances"
+
+    cat_a: Mapped[str] = mapped_column(String, primary_key=True)
+    cat_b: Mapped[str] = mapped_column(String, primary_key=True)
+    cov: Mapped[Optional[float]] = mapped_column(Numeric)
+
+
+# ── Derived / output tables (filled by the book-analysis run) ─────────────────
+class BaselineRun(Base):
+    """Overnight sim cache — one dated row per client per run, append-only so history
+    accumulates ("since last time"). run_whatif later reads the latest row."""
+
+    __tablename__ = "baseline_runs"
+    __table_args__ = (
+        UniqueConstraint("client_id", "as_of_date", name="uq_baseline_client_date"),
+        Index("ix_baseline_client_date_desc", "client_id", "as_of_date"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"))
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False)
+    seed: Mapped[Optional[int]] = mapped_column(Integer)
+    n_paths: Mapped[Optional[int]] = mapped_column(Integer)
+    goals: Mapped[Optional[list]] = mapped_column(JSONB)  # [{goal_id, success_prob, terminal_pcts, shortfall}]
+    var_95: Mapped[Optional[float]] = mapped_column(Numeric)
+    cvar_95: Mapped[Optional[float]] = mapped_column(Numeric)
+    max_drawdown: Mapped[Optional[float]] = mapped_column(Numeric)
+    suitability_mismatch: Mapped[Optional[float]] = mapped_column(Numeric)
+    risk_score: Mapped[Optional[float]] = mapped_column(Numeric)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class RadarOutput(Base):
+    """Book-level ranked suitability list — one current row per client, refreshed each
+    run. Powers the Risk Radar (rank_book)."""
+
+    __tablename__ = "radar_output"
+
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id", ondelete="CASCADE"), primary_key=True
+    )
+    suitability_mismatch: Mapped[Optional[float]] = mapped_column(Numeric)  # >0 => over-exposed
+    tolerable_dd: Mapped[Optional[float]] = mapped_column(Numeric)
+    simulated_dd: Mapped[Optional[float]] = mapped_column(Numeric)
+    flags: Mapped[Optional[list]] = mapped_column(JSONB)  # ['off_track','concentrated_fund', ...]
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 # ── Derived holdings view (never materialized) ────────────────────────────────
 # Net units × latest NAV per (client, fund), rolled up with the fund's category.
 LATEST_HOLDINGS_VIEW = """
@@ -191,9 +264,19 @@ create view latest_holdings as
   having sum(case when t.type='buy' then t.units else -t.units end) > 0
 """
 
+# Fast "latest row per client" lookup for the what-if hot path.
+LATEST_BASELINE_VIEW = """
+create view latest_baseline as
+  select distinct on (client_id) *
+  from baseline_runs
+  order by client_id, as_of_date desc
+"""
+
 
 def create_views(engine) -> None:
     """(Re)create SQL views. Call after create_all — views depend on the tables."""
     with engine.begin() as conn:
         conn.exec_driver_sql("drop view if exists latest_holdings")
         conn.exec_driver_sql(LATEST_HOLDINGS_VIEW)
+        conn.exec_driver_sql("drop view if exists latest_baseline")
+        conn.exec_driver_sql(LATEST_BASELINE_VIEW)

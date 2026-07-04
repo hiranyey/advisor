@@ -53,7 +53,9 @@ def refresh_navs(timeout: float = 60.0) -> dict:
     raw = engine.raw_connection()
     try:
         with raw.cursor() as cur:
-            cur.execute("select scheme_code, id from funds where scheme_code is not null")
+            cur.execute(
+                "select scheme_code, id from funds where scheme_code is not null"
+            )
             code_to_id = {code: fid for code, fid in cur.fetchall()}
 
             rows = [

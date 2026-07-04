@@ -6,7 +6,7 @@
 	import AllocationBreakdown from '$lib/components/AllocationBreakdown.svelte';
 	import ValueChart from '$lib/components/ValueChart.svelte';
 	import RiskPill from '$lib/components/RiskPill.svelte';
-	import { ChevronLeft, TriangleAlert, User, Repeat, TrendingUp } from '@lucide/svelte';
+	import { ChevronLeft, TriangleAlert, User, Repeat, TrendingUp, ArrowDownRight, ArrowUpRight } from '@lucide/svelte';
 
 	// Quick, non-blocking mount fade — cards rise in with a light stagger.
 	const rise = (i) => ({ y: 10, duration: 240, delay: i * 55 });
@@ -16,6 +16,7 @@
 	let client = $state(null);
 	let holdings = $state(null);
 	let sipData = $state(null);
+	let txnData = $state(null);
 	let loading = $state(true);
 	let error = $state(null);
 
@@ -29,11 +30,13 @@
 		client = null;
 		holdings = null;
 		sipData = null;
+		txnData = null;
 		try {
-			[client, holdings, sipData] = await Promise.all([
+			[client, holdings, sipData, txnData] = await Promise.all([
 				api.getClient(cid),
 				api.getHoldings(cid),
-				api.getSips(cid)
+				api.getSips(cid),
+				api.getTransactions(cid)
 			]);
 		} catch (e) {
 			error = e.message;
@@ -207,6 +210,61 @@
 					</table>
 				{/if}
 			</div>
+
+			<!-- Transaction ledger -->
+			<div class="card full" in:fly={rise(5)}>
+				<div class="siphead">
+					<h2>Transactions</h2>
+					{#if txnData && txnData.transactions.length}
+						<span class="dim txncount">{txnData.transactions.length} recorded</span>
+					{/if}
+				</div>
+				{#if !txnData || txnData.transactions.length === 0}
+					<p class="dim">No transactions recorded for this client.</p>
+				{:else}
+					<table>
+						<thead>
+							<tr>
+								<th>Date</th>
+								<th>Fund</th>
+								<th>Category</th>
+								<th>Type</th>
+								<th class="r">Units</th>
+								<th class="r">NAV</th>
+								<th class="r">Amount</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each txnData.transactions as t}
+								{@const TIcon = catIcon(t.category)}
+								<tr>
+									<td class="dim">{fmtDate(t.date)}</td>
+									<td class="name">{t.fund_name}</td>
+									<td>
+										<span class="catcell">
+											<span class="cicon" style="color:{catColor(t.category)}"><TIcon size={15} strokeWidth={1.9} /></span>
+											{catLabel(t.category)}
+										</span>
+									</td>
+									<td>
+										<span class="txntype {t.type === 'buy' ? 'buy' : 'redeem'}">
+											{#if t.type === 'buy'}
+												<ArrowDownRight size={12} strokeWidth={2.2} />
+											{:else}
+												<ArrowUpRight size={12} strokeWidth={2.2} />
+											{/if}
+											{t.type}
+										</span>
+									</td>
+									<td class="r num">{t.units.toLocaleString('en-IN', { maximumFractionDigits: 1 })}</td>
+									<td class="r num">₹{t.nav.toFixed(2)}</td>
+									<td class="r num">{inr(t.amount)}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				{/if}
+			</div>
 		</div>
 	{/if}
 </div>
@@ -363,5 +421,21 @@
 	td.hot {
 		color: var(--outflow);
 		font-weight: 700;
+	}
+	.txncount {
+		font-size: 13px;
+	}
+	.txntype {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-weight: 600;
+		text-transform: capitalize;
+	}
+	.txntype.buy {
+		color: var(--inflow);
+	}
+	.txntype.redeem {
+		color: var(--outflow);
 	}
 </style>

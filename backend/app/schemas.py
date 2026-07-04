@@ -79,6 +79,23 @@ class SipsResponse(BaseModel):
     sips: list[SipOut]
 
 
+class TransactionOut(BaseModel):
+    id: int
+    fund_id: int
+    fund_name: str
+    category: str
+    date: date | None
+    type: str  # 'buy' | 'redeem'
+    units: float
+    nav: float
+    amount: float
+
+
+class TransactionsResponse(BaseModel):
+    client_id: int
+    transactions: list[TransactionOut]
+
+
 class TimePoint(BaseModel):
     date: date
     value: float  # market value of holdings at month-end
@@ -108,3 +125,60 @@ class BookSummary(BaseModel):
     avg_age: float | None
     by_risk_profile: RiskProfileCount
     allocation: list[CategoryAllocation]  # book-wide category roll-up
+
+
+# ── Risk Radar (Monte Carlo suitability) ──────────────────────────────────────
+class RadarKpis(BaseModel):
+    mismatches: int  # clients whose simulated downside exceeds tolerance (mismatch > 0)
+    watch: int  # within tolerance but close (0 >= mismatch > -0.05)
+    median_goal_success: float | None  # median success probability across all goals
+    book_var_95: float | None  # median client 1-yr VaR (loss fraction)
+    book_cvar_95: float | None  # median client 1-yr CVaR
+    off_track_clients: int  # >=1 goal below 50% success
+    concentrated_clients: int  # single-fund or single-category over-exposure
+
+
+class HeatmapCell(BaseModel):
+    count: int
+    state: str  # 'ok' | 'tight' | 'breach'
+
+
+class HeatmapRow(BaseModel):
+    profile: str
+    tolerable_dd: float  # magnitude, e.g. 0.10
+    cells: list[HeatmapCell]  # one per drawdown-bucket column
+
+
+class HistBucket(BaseModel):
+    label: str
+    count: int
+
+
+class RadarCallRow(BaseModel):
+    client_id: int
+    name: str
+    risk_profile: str
+    tolerable_dd: float  # magnitude
+    simulated_dd: float  # magnitude (simulated 1-yr worst case)
+    mismatch: float  # simulated − tolerable (>0 = over-exposed)
+    flags: list[str]
+    top_category: str | None  # dominant exposure (the driver)
+    top_weight: float
+    worst_goal_name: str | None
+    worst_goal_prob: float | None
+    off_track_goals: int
+    status: str  # 'breach' | 'watch' | 'ok'
+
+
+class RadarResponse(BaseModel):
+    as_of_date: date | None
+    n_paths: int | None
+    total_paths: int  # clients × paths — the headline "futures simulated"
+    backend: str  # 'numpy (CPU)' | 'cupy (GPU)'
+    market_source: str  # 'derived' | 'fallback'
+    clients_scored: int
+    heatmap_columns: list[str]
+    kpis: RadarKpis
+    heatmap: list[HeatmapRow]
+    goal_success_hist: list[HistBucket]
+    call_list: list[RadarCallRow]

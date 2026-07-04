@@ -22,6 +22,8 @@ from ..schemas import (
     SipOut,
     SipsResponse,
     TimePoint,
+    TransactionOut,
+    TransactionsResponse,
 )
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -309,3 +311,45 @@ def get_sips(
     ]
     total_monthly = sum(s.monthly_amount for s in sips if s.active)
     return SipsResponse(client_id=client_id, total_monthly=total_monthly, sips=sips)
+
+
+@router.get("/{client_id}/transactions", response_model=TransactionsResponse)
+def get_transactions(
+    client_id: int, session: Session = Depends(get_session)
+) -> TransactionsResponse:
+    """The client's buy/redeem ledger — the source of truth for holdings."""
+    exists = session.execute(
+        text("select 1 from clients where id = :id"), {"id": client_id}
+    ).first()
+    if exists is None:
+        raise HTTPException(status_code=404, detail="client not found")
+
+    rows = session.execute(
+        text(
+            """
+            select t.id, t.fund_id, f.name as fund_name, f.category,
+                   t.date, t.type, t.units, t.nav, t.amount
+            from transactions t
+            join funds f on f.id = t.fund_id
+            where t.client_id = :id
+            order by t.date desc, t.id desc
+            """
+        ),
+        {"id": client_id},
+    ).mappings()
+
+    transactions = [
+        TransactionOut(
+            id=r["id"],
+            fund_id=r["fund_id"],
+            fund_name=r["fund_name"],
+            category=r["category"],
+            date=r["date"],
+            type=r["type"],
+            units=float(r["units"]),
+            nav=float(r["nav"]),
+            amount=float(r["amount"]),
+        )
+        for r in rows
+    ]
+    return TransactionsResponse(client_id=client_id, transactions=transactions)

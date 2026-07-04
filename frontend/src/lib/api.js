@@ -20,7 +20,9 @@ export const api = {
 	getClient: (id) => get(`/clients/${id}`),
 	getHoldings: (id) => get(`/clients/${id}/holdings`),
 	getSips: (id) => get(`/clients/${id}/sips`),
-	bookSummary: () => get('/book/summary')
+	getTransactions: (id) => get(`/clients/${id}/transactions`),
+	bookSummary: () => get('/book/summary'),
+	bookRadar: () => get('/book/radar')
 };
 
 // ── Formatting ────────────────────────────────────────────────────────────────

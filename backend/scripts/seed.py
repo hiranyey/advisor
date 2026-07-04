@@ -22,6 +22,7 @@ from app.db import Base, engine, ensure_database
 # Import models so every table is registered on Base.metadata before create_all.
 from app import models  # noqa: F401
 from app.models import create_views
+from app.tasks.baseline import run_book_analysis
 from app.tasks.refresh_navs import refresh_navs
 
 
@@ -35,24 +36,27 @@ def create_tables() -> None:
 
 
 def main() -> None:
-    print("== 0/4 · ensuring database exists ==")
+    print("== 0/5 · ensuring database exists ==")
     ensure_database()
 
-    print("\n== 1/4 · creating tables + views ==")
+    print("\n== 1/5 · creating tables + views ==")
     create_tables()
 
-    print("\n== 2/4 · loading funds + historical NAVs from CSVs ==")
+    print("\n== 2/5 · loading funds + historical NAVs from CSVs ==")
     csv_stats = load_from_csvs()
 
-    print("\n== 3/4 · topping up NAVs from AMFI live feed ==")
+    print("\n== 3/5 · topping up NAVs from AMFI live feed ==")
     try:
         amfi_stats = refresh_navs()
     except Exception as e:  # AMFI down / offline cloud build — CSV load already succeeded
         print(f"  AMFI top-up skipped ({e!r}); CSV NAVs are still loaded.")
         amfi_stats = None
 
-    print("\n== 4/4 · generating synthetic client book ==")
+    print("\n== 4/5 · generating synthetic client book ==")
     client_stats = generate_clients()
+
+    print("\n== 5/5 · running book analysis (market model + Monte Carlo) ==")
+    baseline_stats = run_book_analysis()
 
     print("\n== done ==")
     print(f"  funds: {csv_stats['funds']}")
@@ -63,6 +67,9 @@ def main() -> None:
     print(f"  goals + holdings + txns + sips: "
           f"{client_stats.get('goal_holdings')} holdings, "
           f"{client_stats.get('transactions')} txns, {client_stats.get('sips')} sips")
+    print(f"  book analysis: market={baseline_stats['market_source']}, "
+          f"{baseline_stats['clients']} clients scored, "
+          f"{baseline_stats['goals']} goals, {baseline_stats['n_paths']} paths")
 
 
 if __name__ == "__main__":

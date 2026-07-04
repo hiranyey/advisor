@@ -8,7 +8,14 @@ dependencies = [
     "apscheduler>=3.11.3",
     "fastapi[standard]>=0.139.0",
     "httpx>=0.28.1",
+    "numpy>=2.5.0",
     "psycopg[binary]>=3.3.4",
+    "pydantic-ai-slim[google]>=2.5.0",
     "python-dotenv>=1.2.2",
     "sqlalchemy>=2.0.51",
 ]
+
+[tool.pyright]
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
