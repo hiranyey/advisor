@@ -35,6 +35,50 @@ from sim_kernel.state import MarketModel
 from ..gpu.client import backend_label
 from ..tools import impl
 
+# Schema reference for `run_sql` — every table/view the DB actually has (mirrors
+# `backend/app/models.py`), kept here rather than derived at runtime so the model always
+# sees the same stable names/columns regardless of what any one request touches.
+_SCHEMA = """
+TABLES
+- funds(id, name, amc, scheme_code, category) — the only instrument type; category is one
+  of the 14 asset-class tags below.
+- nav_history(fund_id, date, nav) — daily NAV per fund; source for valuation and returns.
+- clients(id, name, age, risk_profile) — risk_profile is conservative|balanced|aggressive.
+- goals(id, client_id, name, target_amount, target_date) — a client's financial goals.
+- transactions(id, client_id, fund_id, date, type[buy|redeem], units, nav, amount,
+  created_at) — the buy/redeem ledger; SOURCE OF TRUTH for holdings (never edit).
+- sip_schedule(id, client_id, fund_id, monthly_amount, stepup_rate, start_date, active) —
+  forward-looking recurring contributions; active=false means a lapsed/stopped SIP.
+- goal_holdings(client_id, fund_id, goal_id) — tags a fund holding to the goal it funds.
+- assumptions(category, mu, sigma) — one row per category: annual expected return/vol.
+- covariances(cat_a, cat_b, cov) — pairwise entries of the 14×14 category covariance Σ.
+- baseline_runs(id, client_id, as_of_date, seed, n_paths, goals[jsonb], var_95, cvar_95,
+  max_drawdown, suitability_mismatch, risk_score, created_at) — nightly Monte Carlo cache,
+  one row per client per scored day. `goals` is a JSON array of {goal_id, name,
+  target_amount, horizon_months, success_prob, terminal_pcts:{p5,p50,p90},
+  shortfall:{expected,worst_p5}}.
+- radar_output(client_id, suitability_mismatch, tolerable_dd, simulated_dd, flags[jsonb],
+  reason, updated_at) — one CURRENT row per client (suitability_mismatch > 0 = over-exposed).
+- radar_snapshots(id, client_id, as_of_date, suitability_mismatch, tolerable_dd,
+  simulated_dd, flags[jsonb], worst_goal_prob, portfolio_value, created_at) — append-only
+  history of radar_output, one row per (client, day) — use for trend-over-time questions.
+- book_insights(id, as_of_date, kind[briefing|risk|concentration|goals|opportunity],
+  severity[good|info|watch|critical], title, body, client_ids[jsonb], metric[jsonb],
+  created_at) — cached LLM-written book narrative.
+- copilot_conversations / copilot_messages — this chat's own history; rarely relevant to
+  book/client questions.
+
+VIEWS (derived, never materialized — always current)
+- latest_holdings(client_id, fund_id, category, units, value) — net units × latest NAV per
+  (client, fund); only positive positions. This is "current holdings."
+- latest_baseline — one row per client: `select distinct on (client_id) * from
+  baseline_runs order by client_id, as_of_date desc` (same columns as baseline_runs).
+
+Prefer the dedicated tools when one fits — they're cached/faster. Reach for `run_sql` for
+one-off lookups/aggregates the other tools don't cover (e.g. "which clients have a lapsed
+SIP", "average client age by risk profile", "how many funds does each AMC have").
+""".strip()
+
 _SYSTEM = f"""
 You are the AdvisorOS Copilot for a financial advisor who manages a book of mutual-fund
 clients. You reason over the book and each client, and you call tools to get real numbers —
@@ -47,7 +91,7 @@ these exact tags (map user phrasing: "small cap"/"small-cap" → high_risk_equit
 
 Your tools:
 - query_book: find clients matching criteria (off-track, over-exposed, risk profile,
-  category exposure).
+  category exposure, over-concentrated in a single fund house).
 - get_client_brief: the latest analysis for one client (goal probabilities, risk, suitability).
 - run_whatif: re-simulate one client with a change (SIP delta, reallocation, lump sum,
   horizon shift, return shock) and return before/after goal probabilities.
@@ -58,6 +102,8 @@ Your tools:
   success-probability before/after instead).
 - stress_book: apply one market shock across the whole book; return who breaches tolerance.
 - rank_book: the suitability-mismatch "who do I call first" list.
+- rank_goal_shortfalls: every off-track goal book-wide, ranked by expected ₹ shortfall —
+  "which goals have the biggest funding gap" (a different cut than rank_book's risk ranking).
 - add_transactions: parse plain-English fund activity into rows for the advisor to confirm
   (this parses only; it does NOT commit).
 - get_book_insights: the cached AI-written morning briefing + insight cards shown on the
@@ -65,6 +111,10 @@ Your tools:
   of re-deriving an opinion yourself.
 - book_trend: breach/watch/ok counts over recent scored days plus who changed status since
   the last run — use this for "is my book getting riskier" / "who newly needs a call."
+- run_sql: run one ad-hoc read-only SELECT/WITH query for anything the tools above don't
+  cover. The schema is:
+
+{_SCHEMA}
 
 When the advisor names a client but gives no id (the id is not written as "client id N"),
 first call query_book with `name` to resolve them to a client_id, then use that id with the
@@ -72,9 +122,15 @@ other tools. Chain tools when useful (e.g. find a client, then pull their brief)
 
 FORMATTING — your answer renders in a rich UI (GitHub-flavored markdown + a few special
 blocks). Keep prose tight (2–4 sentences); the tool results are already shown as cards, so do
-NOT restate raw JSON or repeat whole tables — surface only the numbers that matter. Use
-markdown for structure: **bold** key terms, short bullet lists, and `###` headings only for
-longer multi-part answers. Give ₹ amounts in Indian style (₹50,000 / ₹1.2 Cr).
+NOT restate raw JSON or repeat whole tables — surface only the numbers that matter. NEVER
+paste a tool's raw array/list data into your answer, as prose, a bulleted transcription, or a
+code block — every tool result already renders as its own card (and, for project_portfolio,
+a chart) directly above your answer; repeating it adds nothing and looks broken. This matters
+most for project_portfolio (use only its `headline` field) and run_whatif/rank_book/
+rank_goal_shortfalls (whose full lists are already tables) — if you catch yourself about to
+write more than one or two numbers from a list a tool returned, stop and summarize instead.
+Use markdown for structure: **bold** key terms, short bullet lists, and `###` headings only
+for longer multi-part answers. Give ₹ amounts in Indian style (₹50,000 / ₹1.2 Cr).
 
 You may also emit these visualization blocks as fenced code blocks whose info-string is the
 block type and whose body is strict JSON (double quotes, no trailing commas, no comments).
@@ -129,15 +185,19 @@ def _agent():
         risk_profile: str | None = None,
         over_exposed: bool | None = None,
         category: str | None = None,
+        over_concentrated_amc: bool | None = None,
         name: str | None = None,
     ) -> dict:
         """Find clients matching criteria. off_track = has a goal below tolerance;
         over_exposed = simulated downside exceeds risk tolerance; risk_profile is one of
-        conservative/balanced/aggressive; category is one of the 14 category tags; name is
-        a case-insensitive name search — use it to resolve a client referred to by name
-        into their client_id before calling other tools."""
+        conservative/balanced/aggressive; category is one of the 14 category tags;
+        over_concentrated_amc = more than 40% of the portfolio sits with a single fund
+        house ("overexposed to one AMC" / "one fund house"); name is a case-insensitive
+        name search — use it to resolve a client referred to by name into their client_id
+        before calling other tools."""
         return impl.query_book(
-            ctx.deps.session, off_track, risk_profile, over_exposed, category, name
+            ctx.deps.session, off_track, risk_profile, over_exposed, category,
+            over_concentrated_amc, name,
         )
 
     @agent.tool
@@ -186,9 +246,11 @@ def _agent():
         for SIP/lump-sum/reallocation what-ifs the advisor wants to see as a value-over-time
         chart. sip_delta: ₹ change to monthly SIP (e.g. +5000 for "add ₹5,000/mo"). lump_sum:
         one-time ₹ (+ invest / − withdraw). reallocate/reduce_concentration/return_shock:
-        same shape as run_whatif. Don't restate the series yourself — the chart is shown
-        automatically; just narrate the headline (current value, median and range at the
-        horizon)."""
+        same shape as run_whatif.
+        The result's `history` and `projection` arrays are ALREADY rendered as a chart —
+        do not read them, quote them, or paste any part of them (as prose, a table, or a
+        code block). Narrate ONLY from the `headline` field (current value, monthly SIP,
+        and the median/worst/best value at the horizon) plus `levers`."""
         return impl.project_portfolio(
             ctx.deps.session, ctx.deps.model, client_id, horizon_years=horizon_years,
             sip_delta=sip_delta, lump_sum=lump_sum, reallocate=reallocate,
@@ -208,6 +270,13 @@ def _agent():
     def rank_book(ctx: RunContext[CopilotDeps], limit: int = 25) -> dict:
         """The book-wide suitability-mismatch call list — who to call first, and why."""
         return impl.rank_book(ctx.deps.session, limit)
+
+    @agent.tool
+    def rank_goal_shortfalls(ctx: RunContext[CopilotDeps], limit: int = 25) -> dict:
+        """Every off-track goal across the whole book, ranked by expected ₹ shortfall —
+        "which goals have the biggest funding gap, and by when" (a different cut than
+        rank_book, which ranks by risk/suitability instead of goal funding gap)."""
+        return impl.rank_goal_shortfalls(ctx.deps.session, limit)
 
     @agent.tool
     def get_book_insights(ctx: RunContext[CopilotDeps]) -> dict:
@@ -230,6 +299,14 @@ def _agent():
 
         parsed = await parse_transactions_text(text)
         return impl.build_transaction_proposal(ctx.deps.session, client_id, text, parsed)
+
+    @agent.tool
+    def run_sql(ctx: RunContext[CopilotDeps], query: str) -> dict:
+        """Run one ad-hoc, read-only SQL query (a single SELECT or WITH statement) against
+        the schema described in your instructions, for questions the other tools don't
+        cover. Rejected if it isn't a single SELECT/WITH statement or contains a
+        write/DDL keyword. Results are capped at 200 rows."""
+        return impl.run_sql(ctx.deps.session, query)
 
     return agent
 

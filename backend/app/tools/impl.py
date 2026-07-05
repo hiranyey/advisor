@@ -13,9 +13,12 @@ it touches the ledger.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+import re
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from sim_kernel import pipelines
@@ -30,6 +33,8 @@ from ..engine.radar_status import status as mismatch_status
 from ..gpu import client as gpu_client
 
 CATEGORY_MIN_WEIGHT = 0.15  # a client "has exposure to" a category above this weight
+AMC_CONCENTRATION = 0.40  # single-fund-house weight above this is "overexposed" (matches
+                           # the category concentration threshold in api/clients.py)
 CALL_LIST_LIMIT = 25
 
 
@@ -40,13 +45,15 @@ def query_book(
     risk_profile: str | None = None,
     over_exposed: bool | None = None,
     category: str | None = None,
+    over_concentrated_amc: bool | None = None,
     name: str | None = None,
     limit: int = CALL_LIST_LIMIT,
 ) -> dict:
     """Find clients matching criteria: off-track goals, over-exposed vs tolerance,
-    a given risk profile, heavy exposure to one of the 14 categories, or a name search
-    (use `name` to resolve a client the advisor refers to by name into their client_id).
-    Reads the cached radar/baseline — run the book analysis first if it comes back empty."""
+    a given risk profile, heavy exposure to one of the 14 categories, over-concentrated
+    in a single fund house (AMC), or a name search (use `name` to resolve a client the
+    advisor refers to by name into their client_id). Reads the cached radar/baseline —
+    run the book analysis first if it comes back empty."""
     rows = session.execute(
         text(
             """
@@ -54,7 +61,8 @@ def query_book(
                    r.suitability_mismatch, r.simulated_dd, r.tolerable_dd, r.flags,
                    coalesce(h.total, 0) as portfolio_value,
                    tc.category as top_category, tc.weight as top_weight,
-                   cx.weight as cat_weight
+                   cx.weight as cat_weight,
+                   ta.amc as top_amc, ta.weight as top_amc_weight
             from clients c
             left join radar_output r on r.client_id = c.id
             left join (
@@ -75,10 +83,21 @@ def query_book(
                 from latest_holdings lh
                 where lh.client_id = c.id and lh.category = :category
             ) cx on true
+            left join lateral (
+                select f.amc,
+                       sum(lh.value) / nullif(
+                           (select sum(value) from latest_holdings lh4 where lh4.client_id = c.id), 0
+                       ) as weight
+                from latest_holdings lh
+                join funds f on f.id = lh.fund_id
+                where lh.client_id = c.id and f.amc is not null
+                group by f.amc order by sum(lh.value) desc limit 1
+            ) ta on true
             where (cast(:risk_profile as text) is null or c.risk_profile = :risk_profile)
               and (not :off_track or r.flags @> cast('["off_track"]' as jsonb))
               and (not :over_exposed or r.suitability_mismatch > 0)
               and (cast(:category as text) is null or coalesce(cx.weight, 0) >= :cat_min)
+              and (not :over_concentrated_amc or coalesce(ta.weight, 0) > :amc_min)
               and (cast(:name as text) is null or c.name ilike '%' || :name || '%')
             order by r.suitability_mismatch desc nulls last, portfolio_value desc
             limit :limit
@@ -89,8 +108,10 @@ def query_book(
             "over_exposed": bool(over_exposed),
             "risk_profile": risk_profile,
             "category": category,
+            "over_concentrated_amc": bool(over_concentrated_amc),
             "name": name,
             "cat_min": CATEGORY_MIN_WEIGHT,
+            "amc_min": AMC_CONCENTRATION,
             "limit": limit,
         },
     ).mappings().all()
@@ -108,14 +129,16 @@ def query_book(
             "top_category": r["top_category"],
             "top_weight": _f(r["top_weight"]),
             "category_weight": _f(r["cat_weight"]) if category else None,
+            "top_amc": r["top_amc"],
+            "top_amc_weight": _f(r["top_amc_weight"]),
         }
         for r in rows
     ]
     return {
         "count": len(matches),
         "criteria": _clean(
-            off_track=off_track, risk_profile=risk_profile,
-            over_exposed=over_exposed, category=category, name=name,
+            off_track=off_track, risk_profile=risk_profile, over_exposed=over_exposed,
+            category=category, over_concentrated_amc=over_concentrated_amc, name=name,
         ),
         "clients": matches,
     }
@@ -268,6 +291,20 @@ def run_whatif(
     return gpu_client.whatif(state, model, levers, n_paths=settings.mc_n_paths, seed=settings.mc_seed)
 
 
+def _downsample(points: list, max_points: int = 40) -> list:
+    """Thin a chronological list to at most `max_points`, always keeping the last one.
+    Keeps a multi-year monthly history light enough that the LLM isn't handed a wall of
+    numbers to (mis)transcribe — the chart itself always gets the full-resolution series
+    from `value_over_time`, this only shrinks what rides along in the tool result."""
+    if len(points) <= max_points:
+        return points
+    step = -(-len(points) // max_points)  # ceil division
+    sampled = points[::step]
+    if sampled[-1] is not points[-1]:
+        sampled.append(points[-1])
+    return sampled
+
+
 # ── project_portfolio ────────────────────────────────────────────────────────
 def project_portfolio(
     session: Session,
@@ -300,7 +337,7 @@ def project_portfolio(
     )
 
     history = value_over_time(session, client_id)
-    hist_points = [{"date": str(p.date), "value": round(p.value)} for p in history]
+    hist_points = _downsample([{"date": str(p.date), "value": round(p.value)} for p in history])
 
     # Anchor the fan at the last historical point so it starts exactly where the solid
     # history line ends, in both date and value, instead of jumping to a fresh origin.
@@ -308,20 +345,33 @@ def project_portfolio(
     anchor_value = round(history[-1].value) if history else projection["start_value"]
     series = projection["series"]
     future_dates = [str(anchor_date + timedelta(days=365 * (m // 12))) for m in series["months"]]
+    p50 = [round(v) for v in series["p50"]]
+    p5 = [round(v) for v in series["p5"]]
+    p90 = [round(v) for v in series["p90"]]
 
     return {
         "client_id": client_id,
         "client_name": state.name,
-        "history": hist_points,
-        "horizon_years": horizon_years,
+        # The only fields worth narrating — everything else below is chart data, already
+        # rendered automatically as a graph; never read from history/projection in prose.
+        "headline": {
+            "current_value": anchor_value,
+            "monthly_sip": projection["monthly_sip"],
+            "horizon_years": horizon_years,
+            "median_at_horizon": p50[-1] if p50 else anchor_value,
+            "worst_at_horizon": p5[-1] if p5 else anchor_value,
+            "best_at_horizon": p90[-1] if p90 else anchor_value,
+        },
         "levers": projection["levers"],
+        "horizon_years": horizon_years,
         "current_value": anchor_value,
         "monthly_sip": projection["monthly_sip"],
+        "history": hist_points,
         "projection": {
             "dates": [str(anchor_date), *future_dates],
-            "p5": [anchor_value, *(round(v) for v in series["p5"])],
-            "p50": [anchor_value, *(round(v) for v in series["p50"])],
-            "p90": [anchor_value, *(round(v) for v in series["p90"])],
+            "p5": [anchor_value, *p5],
+            "p50": [anchor_value, *p50],
+            "p90": [anchor_value, *p90],
         },
         "elapsed_ms": projection["elapsed_ms"],
         "backend": projection["backend"],
@@ -418,6 +468,46 @@ def rank_book(session: Session, limit: int = CALL_LIST_LIMIT) -> dict:
             "reason": r["reason"],
         })
     return {"count": len(call_list), "call_list": call_list}
+
+
+# ── rank_goal_shortfalls ────────────────────────────────────────────────────────
+def rank_goal_shortfalls(session: Session, limit: int = CALL_LIST_LIMIT) -> dict:
+    """Every off-track goal across the whole book, ranked by expected ₹ shortfall —
+    "who's furthest from their goal, and by when" rather than rank_book's suitability
+    (risk-direction) ranking. Reads the same cached `latest_baseline.goals` per-goal
+    stats `get_client_brief` reads for one client, just unnested across the whole book."""
+    rows = session.execute(
+        text(
+            """
+            select c.id, c.name, b.goals
+            from latest_baseline b
+            join clients c on c.id = b.client_id
+            where b.goals is not null
+            """
+        )
+    ).mappings().all()
+
+    shortfalls = []
+    for r in rows:
+        for g in (r["goals"] or []):
+            prob = g.get("success_prob")
+            if prob is None or prob >= settings.mc_confidence:
+                continue
+            sf = g.get("shortfall") or {}
+            shortfalls.append({
+                "client_id": r["id"],
+                "name": r["name"],
+                "goal_id": g.get("goal_id"),
+                "goal_name": g.get("name"),
+                "target_amount": g.get("target_amount"),
+                "horizon_months": g.get("horizon_months"),
+                "success_prob": prob,
+                "shortfall_expected": sf.get("expected"),
+                "shortfall_worst": sf.get("worst_p5"),
+            })
+    shortfalls.sort(key=lambda x: x["shortfall_expected"] or 0, reverse=True)
+    ranked = shortfalls[:limit]
+    return {"count": len(shortfalls), "ranked": ranked}
 
 
 # ── get_book_insights ─────────────────────────────────────────────────────────
@@ -606,9 +696,66 @@ def _resolve_transaction(session: Session, p: dict) -> dict:
     return row
 
 
+# ── run_sql (read-only, LLM-authored) ──────────────────────────────────────────
+SQL_ROW_LIMIT = 200
+_SQL_ALLOWED_START = re.compile(r"^\s*(select|with)\b", re.IGNORECASE)
+_SQL_FORBIDDEN = re.compile(
+    r"\b(insert|update|delete|drop|alter|truncate|grant|revoke|create|call|copy|"
+    r"vacuum|reindex|comment|execute|do|listen|notify|lock)\b",
+    re.IGNORECASE,
+)
+
+
+def run_sql(session: Session, query: str) -> dict:
+    """Run one ad-hoc, read-only SQL query against the book's schema for questions the
+    other tools don't cover. Guardrails, not a substitute for care: must be a single
+    SELECT/WITH statement (no semicolon-separated second statement), no DDL/DML/session
+    keywords, a 5s statement timeout, and results capped at SQL_ROW_LIMIT rows (wrapped
+    as a subquery so the cap applies regardless of the query's own ORDER BY/LIMIT)."""
+    q = query.strip().rstrip(";")
+    if ";" in q:
+        return {"error": "only a single statement is allowed — remove the semicolon", "query": q}
+    if not _SQL_ALLOWED_START.match(q):
+        return {"error": "only SELECT/WITH queries are allowed", "query": q}
+    if _SQL_FORBIDDEN.search(q):
+        return {"error": "query contains a disallowed keyword — only reads are allowed", "query": q}
+
+    try:
+        session.execute(text("set local statement_timeout = '5000ms'"))
+        rows = session.execute(
+            # the newlines around `q` keep a trailing `-- comment` in the query from
+            # swallowing the closing paren/limit clause below it
+            text(f"select * from (\n{q}\n) as _sub limit :lim"), {"lim": SQL_ROW_LIMIT + 1}
+        ).mappings().all()
+    except SQLAlchemyError as e:
+        session.rollback()
+        return {"error": str(getattr(e, "orig", e)), "query": q}
+
+    truncated = len(rows) > SQL_ROW_LIMIT
+    rows = rows[:SQL_ROW_LIMIT]
+    return {
+        "query": q,
+        "row_count": len(rows),
+        "truncated": truncated,
+        "columns": list(rows[0].keys()) if rows else [],
+        "rows": [{k: _jsonable(v) for k, v in r.items()} for r in rows],
+    }
+
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 def _f(x) -> float | None:
     return round(float(x), 4) if x is not None else None
+
+
+def _jsonable(v):
+    """Coerce one arbitrary SQL result value (Decimal/date/datetime pass through
+    unscathed everywhere else in this file because each query casts explicitly; `run_sql`
+    can't know its columns ahead of time, so it coerces generically instead)."""
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (datetime, date)):
+        return v.isoformat()
+    return v
 
 
 def _clean(**kw) -> dict:

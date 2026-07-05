@@ -11,6 +11,8 @@
 		FlaskConical,
 		Siren,
 		ListOrdered,
+		Target,
+		Database,
 		ReceiptText,
 		TrendingUp,
 		TrendingDown,
@@ -33,6 +35,8 @@
 		project_portfolio: { label: 'project_portfolio', icon: TrendingUp },
 		stress_book: { label: 'stress_book', icon: Siren },
 		rank_book: { label: 'rank_book', icon: ListOrdered },
+		rank_goal_shortfalls: { label: 'rank_goal_shortfalls', icon: Target },
+		run_sql: { label: 'run_sql', icon: Database },
 		add_transactions: { label: 'add_transactions', icon: ReceiptText }
 	};
 	const toolLabel = $derived(META[entry.tool]?.label ?? entry.tool);
@@ -101,10 +105,11 @@
 
 	{:else if entry.tool === 'query_book'}
 		{@const list = result.clients ?? []}
+		{@const showAmc = !!result.criteria?.over_concentrated_amc}
 		<p class="cap">{result.count} matches{#if result.criteria && Object.keys(result.criteria).length} · {Object.entries(result.criteria).map(([k, v]) => `${k}: ${v}`).join(', ')}{/if}</p>
 		<div class="tablewrap">
 			<table>
-				<thead><tr><th>Client</th><th>Profile</th><th class="r">Value</th><th>Top exposure</th><th class="r">Mismatch</th></tr></thead>
+				<thead><tr><th>Client</th><th>Profile</th><th class="r">Value</th><th>Top exposure</th>{#if showAmc}<th>Top AMC</th>{/if}<th class="r">Mismatch</th></tr></thead>
 				<tbody>
 					{#each list.slice(0, 8) as c}
 						<tr class="rowlink" onclick={() => goto(`/clients/${c.client_id}`)}>
@@ -112,7 +117,29 @@
 							<td><span class="pill {profileClass(c.risk_profile)}">{c.risk_profile}</span></td>
 							<td class="r num">{inr(c.portfolio_value)}</td>
 							<td class="dimc">{c.top_category ? catLabel(c.top_category) : '—'}{#if c.top_weight} · {pct(c.top_weight, 0)}{/if}</td>
+							{#if showAmc}<td class="dimc">{c.top_amc ?? '—'}{#if c.top_amc_weight} · {pct(c.top_amc_weight, 0)}{/if}</td>{/if}
 							<td class="r num">{c.suitability_mismatch != null ? (c.suitability_mismatch > 0 ? '+' : '') + pct(c.suitability_mismatch, 0) : '—'}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+
+	<!-- ── rank_goal_shortfalls: off-track goals ranked by ₹ gap ─────────────── -->
+	{:else if entry.tool === 'rank_goal_shortfalls'}
+		{@const list = result.ranked ?? []}
+		<p class="cap">{result.count} off-track goal{result.count === 1 ? '' : 's'} ranked by expected shortfall</p>
+		<div class="tablewrap">
+			<table>
+				<thead><tr><th>Client</th><th>Goal</th><th class="r">Target</th><th class="r">Success</th><th class="r">Shortfall</th></tr></thead>
+				<tbody>
+					{#each list.slice(0, 8) as g}
+						<tr class="rowlink" onclick={() => goto(`/clients/${g.client_id}`)}>
+							<td class="name">{g.name}</td>
+							<td class="dimc">{g.goal_name ?? '—'}</td>
+							<td class="r num">{inr(g.target_amount)}</td>
+							<td class="r num">{pct(g.success_prob, 0)}</td>
+							<td class="r num cr-text">{inr(g.shortfall_expected)}</td>
 						</tr>
 					{/each}
 				</tbody>
@@ -196,13 +223,21 @@
 
 	<!-- ── project_portfolio: history + projected P5/P50/P90 fan chart ──────────── -->
 	{:else if entry.tool === 'project_portfolio'}
-		{@const n = result.projection?.p50?.length ?? 0}
+		{@const h = result.headline ?? {}}
+		{@const p50 = result.projection?.p50 ?? []}
+		{@const p5 = result.projection?.p5 ?? []}
+		{@const p90 = result.projection?.p90 ?? []}
+		{@const current = h.current_value ?? result.current_value}
+		{@const median = h.median_at_horizon ?? p50[p50.length - 1]}
+		{@const worst = h.worst_at_horizon ?? p5[p5.length - 1]}
+		{@const best = h.best_at_horizon ?? p90[p90.length - 1]}
+		{@const years = h.horizon_years ?? result.horizon_years}
 		{#if result.levers?.length}<p class="cap">Change: {result.levers.join(' · ')}</p>{/if}
 		<div class="stresshead">
-			<div class="kpimini"><div class="kv">{inr(result.current_value)}</div><div class="kl">value today</div></div>
-			{#if n}
-				<div class="kpimini"><div class="kv">{inr(result.projection.p50[n - 1])}</div><div class="kl">median in {result.horizon_years} yrs</div></div>
-				<span class="cap">range {inr(result.projection.p5[n - 1])} – {inr(result.projection.p90[n - 1])}</span>
+			<div class="kpimini"><div class="kv">{inr(current)}</div><div class="kl">value today</div></div>
+			{#if median != null}
+				<div class="kpimini"><div class="kv">{inr(median)}</div><div class="kl">median in {years} yrs</div></div>
+				<span class="cap">range {inr(worst)} – {inr(best)}</span>
 			{/if}
 		</div>
 		<ProjectionChart history={result.history ?? []} projection={result.projection} />
@@ -260,6 +295,27 @@
 			<button class="commit" onclick={() => oncommit?.(result.client_id, committable)}>
 				<Check size={14} /> Commit {committable.length} to ledger
 			</button>
+		{/if}
+
+	<!-- ── run_sql: ad-hoc read-only query result ────────────────────────────── -->
+	{:else if entry.tool === 'run_sql'}
+		<pre class="raw">{result.query}</pre>
+		{#if result.columns?.length}
+			<p class="cap">
+				{result.row_count} row{result.row_count === 1 ? '' : 's'}{#if result.truncated} · truncated to {result.row_count}{/if}
+			</p>
+			<div class="tablewrap">
+				<table>
+					<thead><tr>{#each result.columns as col}<th>{col}</th>{/each}</tr></thead>
+					<tbody>
+						{#each result.rows.slice(0, 20) as row}
+							<tr>{#each result.columns as col}<td class="num">{row[col] ?? '—'}</td>{/each}</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{:else}
+			<p class="cap">No rows returned.</p>
 		{/if}
 	{:else}
 		<pre class="raw">{JSON.stringify(result, null, 2)}</pre>

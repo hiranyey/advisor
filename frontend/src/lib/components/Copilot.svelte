@@ -13,12 +13,48 @@
 	// `clientId` scopes "this client" phrasing when embedded on a client page (optional).
 	let { clientId = null } = $props();
 
+	// A chip is either a ready-to-send `prompt`, or a `mention` template (a client-specific
+	// question with no client hardcoded) — clicking one drops "@" into the composer and
+	// opens the mention picker at that point so the advisor names a real client of theirs.
 	const CHIPS = [
-		'Who should I call first, and why?',
-		'If small-cap fell 20% over 3 months, who couldn’t stomach it?',
-		'Give me the brief on Indrani Padmanabhan',
-		'For Indrani Padmanabhan, what if she adds ₹8,000/mo to her SIP?'
+		{ prompt: 'Who should I call first, and why?' },
+		{ prompt: "If small-cap fell 20% over 3 months, who couldn't stomach it?" },
+		{ mention: { prefix: 'Give me the brief on ', suffix: '' } },
+		{ mention: { prefix: 'What if ', suffix: ' added ₹8,000/month to their SIP?' } },
+		{ mention: { prefix: 'What will the portfolio for ', suffix: ' look like over the next 10 years?' } },
+		{ prompt: 'Is my book getting riskier over the last month?' },
+		{ prompt: 'What stood out in the book this morning?' },
+		{ prompt: 'Which clients are overexposed to a single fund house?' },
+		{ prompt: 'Which goals across my book have the biggest funding gap, and by when?' }
 	];
+
+	function chipLabel(c) {
+		return c.mention ? `${c.mention.prefix}…${c.mention.suffix}` : c.prompt;
+	}
+
+	// Mention-chips don't send immediately — they seed the composer with "<prefix>@<suffix>"
+	// and open the mention picker right after the "@", reusing the same `mentionStart`/
+	// `selectMention` machinery a manually-typed "@" already drives.
+	async function useChip(c) {
+		if (!c.mention) {
+			send(c.prompt);
+			return;
+		}
+		const { prefix, suffix } = c.mention;
+		input = prefix + '@' + suffix;
+		mentionStart = prefix.length;
+		mentionQuery = '';
+		activeIdx = 0;
+		mentionOpen = true;
+		ensureClients();
+		await tick();
+		if (taEl) {
+			taEl.focus();
+			const pos = prefix.length + 1;
+			taEl.setSelectionRange(pos, pos);
+			autogrow(taEl);
+		}
+	}
 
 	let messages = $state([]); // {role, content?, sent?, trace?, elapsed_ms?, backend?, error?}
 	let input = $state('');
@@ -436,15 +472,14 @@
 			<div class="empty">
 				<h2>Ask the book anything.</h2>
 				<p class="h2sub">
-					The Copilot reasons over your whole book and each client, calling five tools —
-					<b>query_book</b>, <b>get_client_brief</b>, <b>run_whatif</b>, <b>stress_book</b>,
-					<b>rank_book</b> — and narrates what it finds. Every tool call and its result show
-					up right here.
+					The Copilot reasons over your whole book and each client, calling tools like
+					<b>query_book</b>, <b>get_client_brief</b>, <b>run_whatif</b>, and more — and
+					narrates what it finds. Every tool call and its result show up right here.
 				</p>
 				<div class="chips">
-					{#each CHIPS as c}
-						<button class="chip" onclick={() => send(c)}>
-							<MessageSquare size={14} strokeWidth={1.8} />{c}
+					{#each CHIPS as c, i}
+						<button class="chip" style="animation-delay:{0.12 + i * 0.07}s" onclick={() => useChip(c)}>
+							<MessageSquare size={14} strokeWidth={1.8} />{chipLabel(c)}
 						</button>
 					{/each}
 				</div>
@@ -753,18 +788,6 @@
 			transform 0.12s var(--ease-out),
 			box-shadow 0.12s var(--ease-out);
 		animation: fadeUp 0.4s var(--ease-out) both;
-	}
-	.chip:nth-child(1) {
-		animation-delay: 0.12s;
-	}
-	.chip:nth-child(2) {
-		animation-delay: 0.19s;
-	}
-	.chip:nth-child(3) {
-		animation-delay: 0.26s;
-	}
-	.chip:nth-child(4) {
-		animation-delay: 0.33s;
 	}
 	.chip:hover {
 		transform: translate(-1px, -1px);
