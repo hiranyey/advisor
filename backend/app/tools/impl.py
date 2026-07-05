@@ -62,7 +62,8 @@ def query_book(
                    coalesce(h.total, 0) as portfolio_value,
                    tc.category as top_category, tc.weight as top_weight,
                    cx.weight as cat_weight,
-                   ta.amc as top_amc, ta.weight as top_amc_weight
+                   ta.amc as top_amc, ta.weight as top_amc_weight,
+                   count(*) over () as total_matches
             from clients c
             left join radar_output r on r.client_id = c.id
             left join (
@@ -134,8 +135,11 @@ def query_book(
         }
         for r in rows
     ]
+    total = int(rows[0]["total_matches"]) if rows else 0
     return {
-        "count": len(matches),
+        "count": total,
+        "returned": len(matches),
+        "truncated": total > len(matches),
         "criteria": _clean(
             off_track=off_track, risk_profile=risk_profile, over_exposed=over_exposed,
             category=category, over_concentrated_amc=over_concentrated_amc, name=name,
@@ -425,6 +429,8 @@ def stress_book(
         "breaches": len(breaches),
         "filters": _clean(**filters),
         "ranked": ranked,
+        "elapsed_ms": result["elapsed_ms"],
+        "backend": result["backend"],
     }
 
 

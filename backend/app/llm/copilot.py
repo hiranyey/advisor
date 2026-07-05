@@ -12,7 +12,6 @@ get_book_insights · book_trend.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
@@ -34,6 +33,9 @@ from sim_kernel.state import MarketModel
 
 from ..gpu.client import backend_label
 from ..tools import impl
+
+MAX_SQL_CALLS_PER_TURN = 2  # one shot + one retry if the first query errors — not a
+                            # license to iterate/explore; see run_sql's tool docstring
 
 # Schema reference for `run_sql` — every table/view the DB actually has (mirrors
 # `backend/app/models.py`), kept here rather than derived at runtime so the model always
@@ -111,14 +113,23 @@ Your tools:
   of re-deriving an opinion yourself.
 - book_trend: breach/watch/ok counts over recent scored days plus who changed status since
   the last run — use this for "is my book getting riskier" / "who newly needs a call."
-- run_sql: run one ad-hoc read-only SELECT/WITH query for anything the tools above don't
-  cover. The schema is:
+- run_sql: a LAST-RESORT escape hatch for one-off lookups/aggregates none of the tools
+  above cover — most questions ("who's overexposed", "biggest shortfall", "riskier over
+  time") already have a dedicated tool above; reach for those first, they're cached and
+  their numbers are the ones the advisor should trust. Capped at {MAX_SQL_CALLS_PER_TURN}
+  calls per turn (one shot + one retry if it errors) — think the query through instead of
+  trial-and-error, and NEVER call it to "double-check" a number a dedicated tool already
+  gave you. If it comes back as a small aggregate (a handful of numbers), explain what they
+  mean in a sentence — don't just leave a bare table for the advisor to interpret. The
+  schema is:
 
 {_SCHEMA}
 
 When the advisor names a client but gives no id (the id is not written as "client id N"),
 first call query_book with `name` to resolve them to a client_id, then use that id with the
-other tools. Chain tools when useful (e.g. find a client, then pull their brief).
+other tools. Chain tools when useful (e.g. find a client, then pull their brief). Trust each
+tool's own numbers (query_book's `count` is the true total match count, not just how many
+rows are shown) — don't re-derive the same answer with a second tool to verify it.
 
 FORMATTING — your answer renders in a rich UI (GitHub-flavored markdown + a few special
 blocks). Keep prose tight (2–4 sentences); the tool results are already shown as cards, so do
@@ -163,6 +174,7 @@ class CopilotDeps:
     session: Session
     model: MarketModel
     client_id: int | None = None
+    sql_calls: int = 0  # run_sql calls made this turn — see MAX_SQL_CALLS_PER_TURN below
 
 
 @lru_cache(maxsize=1)
@@ -305,7 +317,17 @@ def _agent():
         """Run one ad-hoc, read-only SQL query (a single SELECT or WITH statement) against
         the schema described in your instructions, for questions the other tools don't
         cover. Rejected if it isn't a single SELECT/WITH statement or contains a
-        write/DDL keyword. Results are capped at 200 rows."""
+        write/DDL keyword. Results are capped at 200 rows. Capped at
+        MAX_SQL_CALLS_PER_TURN calls per turn — get the query right rather than exploring;
+        never call this to "double-check" a number a dedicated tool already gave you."""
+        if ctx.deps.sql_calls >= MAX_SQL_CALLS_PER_TURN:
+            return {
+                "error": (
+                    f"run_sql has already been used {ctx.deps.sql_calls} times this turn. "
+                    "Stop querying and answer with what you already have."
+                ),
+            }
+        ctx.deps.sql_calls += 1
         return impl.run_sql(ctx.deps.session, query)
 
     return agent
@@ -342,9 +364,12 @@ async def run_copilot(
       {"type": "tool_call", "tool_call_id", "tool", "args"} — a tool call has started.
       {"type": "tool_result", "tool_call_id", "tool", "result"} — that call resolved.
 
-    Returns {answer, trace:[{tool, args, result}], elapsed_ms, backend}. Raises
-    LLMNotConfigured (from the provider) if no API key is set — the endpoint maps that
-    to a clear 503.
+    Returns {answer, trace:[{tool, args, result}], elapsed_ms, backend}. `elapsed_ms` is
+    the simulation-only time (summed across every GPU-backed tool call this turn, from
+    each job's own self-reported `elapsed_ms`) — not the turn's wall time, which is
+    dominated by LLM latency and would make the GPU-vs-CPU pitch number meaningless.
+    Raises LLMNotConfigured (from the provider) if no API key is set — the endpoint maps
+    that to a clear 503.
 
     Narration is paired to its own turn's tool calls (not a later turn's) purely by call
     order: `event_stream_handler` below is invoked once per model-request node (that
@@ -356,7 +381,6 @@ async def run_copilot(
     """
     agent = _agent()
     deps = CopilotDeps(session=session, model=model, client_id=client_id)
-    start = time.perf_counter()
 
     trace: list[dict] = []
     calls: dict[str, dict] = {}
@@ -404,9 +428,15 @@ async def run_copilot(
         message, message_history=_to_messages(history), deps=deps,
         event_stream_handler=handler,
     )
+    sim_ms = sum(
+        entry["result"]["elapsed_ms"]
+        for entry in trace
+        if isinstance(entry.get("result"), dict)
+        and isinstance(entry["result"].get("elapsed_ms"), (int, float))
+    )
     return {
         "answer": result.output,
         "trace": trace,
-        "elapsed_ms": round((time.perf_counter() - start) * 1000, 1),
+        "elapsed_ms": round(sim_ms, 1),
         "backend": backend_label(),
     }

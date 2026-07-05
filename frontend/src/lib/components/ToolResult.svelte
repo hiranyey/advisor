@@ -106,7 +106,9 @@
 	{:else if entry.tool === 'query_book'}
 		{@const list = result.clients ?? []}
 		{@const showAmc = !!result.criteria?.over_concentrated_amc}
-		<p class="cap">{result.count} matches{#if result.criteria && Object.keys(result.criteria).length} · {Object.entries(result.criteria).map(([k, v]) => `${k}: ${v}`).join(', ')}{/if}</p>
+		<p class="cap">
+			{result.count} match{result.count === 1 ? '' : 'es'}{#if result.truncated} · showing {result.returned}{/if}{#if result.criteria && Object.keys(result.criteria).length} · {Object.entries(result.criteria).map(([k, v]) => `${k}: ${v}`).join(', ')}{/if}
+		</p>
 		<div class="tablewrap">
 			<table>
 				<thead><tr><th>Client</th><th>Profile</th><th class="r">Value</th><th>Top exposure</th>{#if showAmc}<th>Top AMC</th>{/if}<th class="r">Mismatch</th></tr></thead>

@@ -304,7 +304,7 @@ class ToolTrace(BaseModel):
 class CopilotResponse(BaseModel):
     answer: str  # the model's narrated, advisor-ready reply
     trace: list[ToolTrace]  # ordered tool-call trace (rendered inline)
-    elapsed_ms: float  # end-to-end turn wall-time
+    elapsed_ms: float  # simulation-only time this turn (excludes LLM latency)
     backend: str  # 'numpy (CPU)' | 'cupy (GPU)'
     conversation_id: int  # the chat this turn was persisted to
 
