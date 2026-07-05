@@ -35,6 +35,19 @@ def percentiles(terminals) -> dict:
     return {"p5": float(p5), "p50": float(p50), "p90": float(p90)}
 
 
+def percentile_series(checkpoint_months, values) -> dict:
+    """Per-checkpoint P5/P50/P90 — the year-by-year fan for a multi-year portfolio
+    projection chart, vs. `percentiles()` which is terminal-only. `values` is
+    `simulate_series()`'s (checkpoints, paths) array."""
+    p5, p50, p90 = np.quantile(values, [0.05, 0.5, 0.90], axis=1)
+    return {
+        "months": list(checkpoint_months),
+        "p5": [float(v) for v in p5],
+        "p50": [float(v) for v in p50],
+        "p90": [float(v) for v in p90],
+    }
+
+
 def shortfall(terminals, target) -> dict:
     """Expected and worst-case (P5) rupee gap to target, for off-track goals."""
     gap = np.maximum(target - terminals, 0)

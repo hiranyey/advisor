@@ -20,9 +20,9 @@ import numpy as np
 from . import pipelines
 from .backend import BACKEND, GPU, gpu_free_bytes, timer
 from .categories import CAT_INDEX
-from .montecarlo import simulate, simulate_batch
+from .montecarlo import simulate, simulate_batch, simulate_series
 from .state import ClientState, GoalState, MarketModel
-from .whatif import Levers, run_whatif as _run_whatif
+from .whatif import Levers, _shocked_mu, _transform, run_whatif as _run_whatif
 
 RISK_HORIZON_MONTHS = 12
 
@@ -153,6 +153,41 @@ def whatif(payload: dict) -> dict:
     return result
 
 
+# ── job: portfolio_projection (live, single client) ────────────────────────────
+def portfolio_projection(payload: dict) -> dict:
+    """Year-by-year P5/P50/P90 portfolio value, optionally under what-if levers — the
+    "portfolio health over N years" / "what if they add ₹X more SIP" chart. Reuses the
+    same lever transforms `run_whatif` applies to the whole portfolio (`_transform` with
+    `share=1.0`, `_shocked_mu`), just fed into `simulate_series()` instead of `simulate()`
+    so the answer is a value-over-time series, not a single before/after point."""
+    model = MarketModel.from_payload(payload["model"])
+    state = ClientState.from_payload(payload["client"])
+    levers = Levers.from_payload(payload.get("levers") or {})
+    horizon_months = max(int(payload.get("horizon_months") or 120), 1)
+    n_paths = int(payload.get("n_paths") or 8000)
+    seed = int(payload.get("seed") or 42)
+
+    holdings, sip = _transform(state.holdings, state.monthly_sip, levers, 1.0)
+    mu = _shocked_mu(model.mu, levers)
+
+    with timer() as elapsed:
+        checkpoint_months, values = simulate_series(
+            holdings, mu, model.L, sip, horizon_months,
+            n_paths=n_paths, seed=seed, stepup_rate=state.stepup_rate,
+        )
+        series = pipelines.percentile_series(checkpoint_months, values)
+
+    return {
+        "client_id": state.id,
+        "start_value": round(float(holdings.sum())),
+        "monthly_sip": round(float(sip.sum())),
+        "levers": levers.describe(),
+        "series": series,
+        "n_paths": n_paths, "seed": seed,
+        "backend": BACKEND, "gpu": GPU, "elapsed_ms": round(elapsed() * 1000, 1),
+    }
+
+
 # ── job: book_analysis (nightly, whole book) ───────────────────────────────────
 def _goal_stat(g: GoalState, terminals) -> dict:
     prob = pipelines.goal_probability(terminals, g.target_amount)
@@ -280,6 +315,7 @@ def book_stress(payload: dict) -> dict:
 JOBS = {
     "client_insights": client_insights,
     "whatif": whatif,
+    "portfolio_projection": portfolio_projection,
     "book_analysis": book_analysis,
     "book_stress": book_stress,
 }

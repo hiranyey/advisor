@@ -19,7 +19,7 @@ DEFAULT_STEPS_PER_YEAR = 12
 DEFAULT_SEED = 42
 
 
-def simulate(
+def simulate_series(
     holdings,               # (14,)  current ₹ per category (rolled up from funds)
     mu,                     # (14,)  annual expected return per category
     L,                      # (14,14) Cholesky factor of the category covariance Σ
@@ -30,8 +30,15 @@ def simulate(
     seed: int | None = None,
     stepup_rate: float = 0.0,      # optional annual SIP step-up
     shock: dict | None = None,     # e.g. {"month": 0, "deltas": {cat_idx: -0.20}}
+    checkpoint_months: list[int] | None = None,  # default: every steps_per_year (yearly)
 ):
-    """Return terminal portfolio value per path — shape (n_paths,), on host memory.
+    """`simulate()`, but snapshots portfolio value at each of `checkpoint_months` instead
+    of only the terminal month — the year-by-year fan a multi-year projection chart needs,
+    not just the endpoint distribution. `simulate()` below is a one-checkpoint special case
+    of this, so every caller keeps its exact terminal-value semantics for free.
+
+    Returns `(checkpoint_months, values)` where `values.shape == (len(checkpoint_months),
+    n_paths)`, on host memory.
 
     `shock` is how both single-client what-if and book-wide stress inject a market move:
     `shock["deltas"]` maps a category index (CAT_INDEX[...]) to a one-off multiplicative
@@ -40,6 +47,8 @@ def simulate(
     n_paths = n_paths or DEFAULT_N_PATHS
     steps_per_year = steps_per_year or DEFAULT_STEPS_PER_YEAR
     seed = DEFAULT_SEED if seed is None else seed
+    checkpoint_months = checkpoint_months or list(range(steps_per_year, horizon_months + 1, steps_per_year))
+    checkpoints = set(checkpoint_months)
 
     mu = xp.asarray(mu, dtype=xp.float64)
     L = xp.asarray(L, dtype=xp.float64)
@@ -55,6 +64,7 @@ def simulate(
     sqrt_dt = xp.sqrt(xp.asarray(dt))
     value = xp.tile(holdings, (n_paths, 1))  # (paths, 14)
 
+    snapshots = []
     for t in range(horizon_months):
         z = rng.standard_normal((n_paths, n))
         correlated = (z @ L.T) * sqrt_dt          # correlated shocks across categories
@@ -65,8 +75,26 @@ def simulate(
         value += sip                              # inject SIP each month
         if stepup_rate and (t + 1) % steps_per_year == 0:
             sip = sip * (1 + stepup_rate)         # annual step-up
+        if (t + 1) in checkpoints:
+            snapshots.append(value.sum(axis=1))   # (paths,) totals at this checkpoint
 
-    return asnumpy(value.sum(axis=1))             # (paths,) terminal totals
+    return checkpoint_months, asnumpy(xp.stack(snapshots))  # (checkpoints, paths)
+
+
+def simulate(
+    holdings, mu, L, monthly_sip, horizon_months: int,
+    n_paths: int | None = None, steps_per_year: int | None = None, seed: int | None = None,
+    stepup_rate: float = 0.0, shock: dict | None = None,
+):
+    """Return terminal portfolio value per path — shape (n_paths,), on host memory.
+    A one-checkpoint (terminal-only) call to `simulate_series()` — see there for the
+    shared engine and argument docs."""
+    _, values = simulate_series(
+        holdings, mu, L, monthly_sip, horizon_months,
+        n_paths=n_paths, steps_per_year=steps_per_year, seed=seed,
+        stepup_rate=stepup_rate, shock=shock, checkpoint_months=[horizon_months],
+    )
+    return values[0]
 
 
 def simulate_timed(*args, **kwargs):

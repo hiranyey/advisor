@@ -13,7 +13,7 @@ it touches the ledger.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ from sim_kernel.state import MarketModel
 from sim_kernel.whatif import Levers
 
 from ..config import settings
+from ..engine.history import value_over_time
 from ..engine.loader import load_client_state, load_client_states
 from ..engine.radar_status import status as mismatch_status
 from ..gpu import client as gpu_client
@@ -267,6 +268,66 @@ def run_whatif(
     return gpu_client.whatif(state, model, levers, n_paths=settings.mc_n_paths, seed=settings.mc_seed)
 
 
+# ── project_portfolio ────────────────────────────────────────────────────────
+def project_portfolio(
+    session: Session,
+    model: MarketModel,
+    client_id: int,
+    horizon_years: int = 10,
+    sip_delta: float | None = None,
+    lump_sum: float | None = None,
+    reallocate: dict | None = None,
+    reduce_concentration: dict | None = None,
+    return_shock: dict | None = None,
+) -> dict:
+    """Project one client's portfolio value forward `horizon_years`, joined to their
+    actual value-to-date: a solid history line plus a future P5/P50/P90 fan, optionally
+    under a what-if lever (e.g. `sip_delta` for "what if they add ₹X more SIP"). This is
+    the value-over-time chart; for goal-probability before/after, use `run_whatif`."""
+    state = load_client_state(session, client_id, model)
+    if state is None:
+        return {"error": f"client {client_id} not found"}
+
+    horizon_years = max(1, min(int(horizon_years or 10), 40))
+    levers = Levers(
+        sip_delta=float(sip_delta or 0), lump_sum=float(lump_sum or 0),
+        reallocate=reallocate, reduce_concentration=reduce_concentration,
+        return_shock=return_shock,
+    )
+    projection = gpu_client.project_portfolio(
+        state, model, levers, horizon_months=horizon_years * 12,
+        n_paths=settings.mc_n_paths, seed=settings.mc_seed,
+    )
+
+    history = value_over_time(session, client_id)
+    hist_points = [{"date": str(p.date), "value": round(p.value)} for p in history]
+
+    # Anchor the fan at the last historical point so it starts exactly where the solid
+    # history line ends, in both date and value, instead of jumping to a fresh origin.
+    anchor_date = history[-1].date if history else date.today()
+    anchor_value = round(history[-1].value) if history else projection["start_value"]
+    series = projection["series"]
+    future_dates = [str(anchor_date + timedelta(days=365 * (m // 12))) for m in series["months"]]
+
+    return {
+        "client_id": client_id,
+        "client_name": state.name,
+        "history": hist_points,
+        "horizon_years": horizon_years,
+        "levers": projection["levers"],
+        "current_value": anchor_value,
+        "monthly_sip": projection["monthly_sip"],
+        "projection": {
+            "dates": [str(anchor_date), *future_dates],
+            "p5": [anchor_value, *(round(v) for v in series["p5"])],
+            "p50": [anchor_value, *(round(v) for v in series["p50"])],
+            "p90": [anchor_value, *(round(v) for v in series["p90"])],
+        },
+        "elapsed_ms": projection["elapsed_ms"],
+        "backend": projection["backend"],
+    }
+
+
 # ── stress_book ───────────────────────────────────────────────────────────────
 def stress_book(
     session: Session,
@@ -276,8 +337,9 @@ def stress_book(
 ) -> dict:
     """Apply one market shock across the whole book and return who breaches their
     tolerance, worst first. `shock` is per-category deltas + optional horizon_months,
-    e.g. {"high_risk_equity": -0.20, "horizon_months": 3}. Deterministic weight×shock
-    arithmetic by default; set shock["monte_carlo"]=true for correlated spillover via Σ."""
+    e.g. {"high_risk_equity": -0.20, "horizon_months": 3}. Monte Carlo (correlated
+    spillover via Σ) by default; set shock["monte_carlo"]=false for plain weight×shock
+    arithmetic instead."""
     filters = filters or {}
     client_ids = None
     risk_profile = filters.get("risk_profile")
@@ -286,16 +348,10 @@ def stress_book(
     if risk_profile:
         states = [s for s in states if s.risk_profile == risk_profile]
 
-    deterministic = not bool(shock.get("monte_carlo") or shock.get("mc"))
-    if deterministic:
-        # Plain weight×shock arithmetic — no simulate() call, so this never leaves the
-        # backend process (there's nothing for a GPU to accelerate here).
-        breaches = pipelines.stress_book(states, shock)
-    else:
-        result = gpu_client.book_stress(
-            states, model, shock, n_paths=settings.mc_n_paths, seed=settings.mc_seed,
-        )
-        breaches = result["breaches"]
+    result = gpu_client.book_stress(
+        states, model, shock, n_paths=settings.mc_n_paths, seed=settings.mc_seed,
+    )
+    breaches = result["breaches"]
 
     names = {s.id: s.name for s in states}
     profiles = {s.id: s.risk_profile for s in states}
@@ -314,7 +370,7 @@ def stress_book(
     return {
         "shock": deltas,
         "horizon_months": int(shock.get("horizon_months", 0)) or None,
-        "mode": "monte_carlo" if not deterministic else "deterministic",
+        "mode": "monte_carlo" ,
         "clients_evaluated": len([s for s in states if s.total > 0]),
         "breaches": len(breaches),
         "filters": _clean(**filters),

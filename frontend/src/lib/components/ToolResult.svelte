@@ -4,6 +4,7 @@
 	// JSON is always available behind a details disclosure for the demo.
 	import { goto } from '$app/navigation';
 	import { inr, inrFull, pct, catLabel } from '$lib/api.js';
+	import ProjectionChart from './ProjectionChart.svelte';
 	import {
 		Search,
 		FileText,
@@ -29,6 +30,7 @@
 		query_book: { label: 'query_book', icon: Search },
 		get_client_brief: { label: 'get_client_brief', icon: FileText },
 		run_whatif: { label: 'run_whatif', icon: FlaskConical },
+		project_portfolio: { label: 'project_portfolio', icon: TrendingUp },
 		stress_book: { label: 'stress_book', icon: Siren },
 		rank_book: { label: 'rank_book', icon: ListOrdered },
 		add_transactions: { label: 'add_transactions', icon: ReceiptText }
@@ -191,6 +193,19 @@
 				<div class="rk"><span class="rlab">Tolerable</span><span class="rval">{pct(p.tolerable_dd, 0)}</span></div>
 			</div>
 		{/if}
+
+	<!-- ── project_portfolio: history + projected P5/P50/P90 fan chart ──────────── -->
+	{:else if entry.tool === 'project_portfolio'}
+		{@const n = result.projection?.p50?.length ?? 0}
+		{#if result.levers?.length}<p class="cap">Change: {result.levers.join(' · ')}</p>{/if}
+		<div class="stresshead">
+			<div class="kpimini"><div class="kv">{inr(result.current_value)}</div><div class="kl">value today</div></div>
+			{#if n}
+				<div class="kpimini"><div class="kv">{inr(result.projection.p50[n - 1])}</div><div class="kl">median in {result.horizon_years} yrs</div></div>
+				<span class="cap">range {inr(result.projection.p5[n - 1])} – {inr(result.projection.p90[n - 1])}</span>
+			{/if}
+		</div>
+		<ProjectionChart history={result.history ?? []} projection={result.projection} />
 
 	<!-- ── stress_book ───────────────────────────────────────────────────────── -->
 	{:else if entry.tool === 'stress_book'}

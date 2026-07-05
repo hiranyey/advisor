@@ -50,7 +50,12 @@ Your tools:
   category exposure).
 - get_client_brief: the latest analysis for one client (goal probabilities, risk, suitability).
 - run_whatif: re-simulate one client with a change (SIP delta, reallocation, lump sum,
-  horizon shift, return shock) and return before/after.
+  horizon shift, return shock) and return before/after goal probabilities.
+- project_portfolio: project one client's portfolio VALUE forward N years (default 10),
+  combining their actual value-to-date with a future best/median/worst-case range — use
+  this for "portfolio health/value over the next N years" and for SIP/lump-sum/reallocation
+  what-ifs the advisor wants to see as a value-over-time chart (run_whatif is for goal
+  success-probability before/after instead).
 - stress_book: apply one market shock across the whole book; return who breaches tolerance.
 - rank_book: the suitability-mismatch "who do I call first" list.
 - add_transactions: parse plain-English fund activity into rows for the advisor to confirm
@@ -165,11 +170,38 @@ def _agent():
         )
 
     @agent.tool
+    def project_portfolio(
+        ctx: RunContext[CopilotDeps],
+        client_id: int,
+        horizon_years: int = 10,
+        sip_delta: float | None = None,
+        lump_sum: float | None = None,
+        reallocate: dict | None = None,
+        reduce_concentration: dict | None = None,
+        return_shock: dict | None = None,
+    ) -> dict:
+        """Project one client's portfolio value forward `horizon_years` (default 10):
+        their actual value-to-date plus a future P5/P50/P90 range, rendered as a chart.
+        Use for "how will this portfolio look/what's its health over the next N years" and
+        for SIP/lump-sum/reallocation what-ifs the advisor wants to see as a value-over-time
+        chart. sip_delta: ₹ change to monthly SIP (e.g. +5000 for "add ₹5,000/mo"). lump_sum:
+        one-time ₹ (+ invest / − withdraw). reallocate/reduce_concentration/return_shock:
+        same shape as run_whatif. Don't restate the series yourself — the chart is shown
+        automatically; just narrate the headline (current value, median and range at the
+        horizon)."""
+        return impl.project_portfolio(
+            ctx.deps.session, ctx.deps.model, client_id, horizon_years=horizon_years,
+            sip_delta=sip_delta, lump_sum=lump_sum, reallocate=reallocate,
+            reduce_concentration=reduce_concentration, return_shock=return_shock,
+        )
+
+    @agent.tool
     def stress_book(ctx: RunContext[CopilotDeps], shock: dict, filters: dict | None = None) -> dict:
         """Apply one market shock across the whole book and return who breaches tolerance.
         shock: per-category deltas + optional horizon_months, e.g.
-        {"high_risk_equity": -0.20, "horizon_months": 3}. Add "monte_carlo": true for
-        correlated spillover. filters: e.g. {"risk_profile": "conservative"}."""
+        {"high_risk_equity": -0.20, "horizon_months": 3}. Runs Monte Carlo (correlated
+        spillover) by default; set "monte_carlo": false for plain weight×shock arithmetic.
+        filters: e.g. {"risk_profile": "conservative"}."""
         return impl.stress_book(ctx.deps.session, ctx.deps.model, shock, filters)
 
     @agent.tool

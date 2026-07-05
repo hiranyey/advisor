@@ -57,6 +57,19 @@ def whatif(state: ClientState, model: MarketModel, levers: Levers, *, n_paths: i
     })
 
 
+def project_portfolio(
+    state: ClientState, model: MarketModel, levers: Levers, *,
+    horizon_months: int, n_paths: int, seed: int,
+) -> dict:
+    """Year-by-year P5/P50/P90 portfolio value under `levers` (sync — an advisor is
+    waiting). Goals aren't needed for a portfolio-level value chart."""
+    return _run("portfolio_projection", {
+        "model": model.to_payload(), "client": state.to_payload(include_goals=False),
+        "levers": levers.to_payload(), "horizon_months": horizon_months,
+        "n_paths": n_paths, "seed": seed,
+    })
+
+
 def book_analysis(states: list[ClientState], model: MarketModel, *, n_paths: int, seed: int) -> dict:
     """The whole book in one job, run async — a batch pass nobody is waiting on."""
     return _run("book_analysis", {
