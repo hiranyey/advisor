@@ -6,7 +6,7 @@
 	// path prefix so /clients/[id] keeps the Clients tab lit.
 	const tabs = [
 		{ href: '/advisor', label: 'AI Advisor', icon: Sparkles, match: (p) => p.startsWith('/advisor') },
-		{ href: '/', label: 'Risk Radar', icon: Radar, match: (p) => p === '/' || p.startsWith('/radar') },
+		{ href: '/', label: 'Dashboard', icon: Radar, match: (p) => p === '/' || p.startsWith('/radar') },
 		{ href: '/clients', label: 'Clients', icon: Users, match: (p) => p.startsWith('/clients') }
 	];
 

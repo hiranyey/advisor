@@ -8,28 +8,38 @@ seeded tables already support.
 
 from __future__ import annotations
 
+import logging
 import statistics
+from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_session
+from ..engine.radar_status import status as mismatch_status
 from ..gpu.client import backend_label
 from ..schemas import (
+    BookInsightItem,
+    BookInsightsResponse,
     BookSummary,
+    BookTrendResponse,
     CategoryAllocation,
     HeatmapCell,
     HeatmapRow,
     HistBucket,
+    MoverRow,
     RadarCallRow,
     RadarKpis,
     RadarResponse,
     RiskProfileCount,
+    ScatterPoint,
+    TrendPoint,
 )
 
 router = APIRouter(prefix="/book", tags=["book"])
+log = logging.getLogger(__name__)
 
 
 @router.get("/summary", response_model=BookSummary)
@@ -87,7 +97,6 @@ _HEATMAP_COLUMNS = ["0 to −10%", "−10 to −20%", "−20 to −30%", "worse 
 _BUCKET_MIDS = [0.05, 0.15, 0.25, 0.37]
 _TOLERABLE = {"conservative": 0.10, "balanced": 0.20, "aggressive": 0.35}
 _CALL_LIST_LIMIT = 25
-_WATCH_BAND = 0.05  # within this much of tolerance (and under it) = "watch"
 
 
 def _bucket_index(dd_magnitude: float) -> int:
@@ -127,11 +136,15 @@ def book_radar(session: Session = Depends(get_session)) -> RadarResponse:
         text(
             """
             select c.id, c.name, c.risk_profile,
-                   r.suitability_mismatch, r.tolerable_dd, r.simulated_dd, r.flags,
-                   b.goals, b.var_95, b.cvar_95
+                   r.suitability_mismatch, r.tolerable_dd, r.simulated_dd, r.flags, r.reason,
+                   b.goals, b.var_95, b.cvar_95,
+                   coalesce(h.total, 0) as portfolio_value
             from radar_output r
             join clients c on c.id = r.client_id
             left join latest_baseline b on b.client_id = r.client_id
+            left join (
+                select client_id, sum(value) as total from latest_holdings group by client_id
+            ) h on h.client_id = c.id
             """
         )
     ).mappings().all()
@@ -156,18 +169,20 @@ def book_radar(session: Session = Depends(get_session)) -> RadarResponse:
     ).mappings().all()
     top_cat = {r["client_id"]: (r["category"], float(r["weight"] or 0)) for r in top_cat_rows}
 
-    # ── KPIs + heatmap counts + goal histogram, in one pass ──────────────────
+    # ── KPIs + heatmap counts + goal histogram + scatter, in one pass ─────────
     mismatches = watch = off_track_clients = concentrated_clients = 0
     var_list: list[float] = []
     cvar_list: list[float] = []
     all_goal_probs: list[float] = []
     heat_counts = {p: [0, 0, 0, 0] for p in _TOLERABLE}
+    scatter: list[ScatterPoint] = []
 
     for r in rows:
         mismatch = float(r["suitability_mismatch"] or 0)
-        if mismatch > 0:
+        st = mismatch_status(mismatch)
+        if st == "breach":
             mismatches += 1
-        elif mismatch > -_WATCH_BAND:
+        elif st == "watch":
             watch += 1
 
         flags = r["flags"] or []
@@ -185,9 +200,22 @@ def book_radar(session: Session = Depends(get_session)) -> RadarResponse:
         if profile in heat_counts:
             heat_counts[profile][_bucket_index(abs(float(r["simulated_dd"] or 0)))] += 1
 
-        for g in (r["goals"] or []):
+        goals = r["goals"] or []
+        worst_prob = None
+        for g in goals:
             if g.get("success_prob") is not None:
-                all_goal_probs.append(float(g["success_prob"]))
+                p = float(g["success_prob"])
+                all_goal_probs.append(p)
+                worst_prob = p if worst_prob is None else min(worst_prob, p)
+
+        scatter.append(ScatterPoint(
+            client_id=r["id"],
+            name=r["name"],
+            risk_profile=r["risk_profile"] or "balanced",
+            mismatch=mismatch,
+            worst_goal_prob=worst_prob,
+            portfolio_value=float(r["portfolio_value"] or 0),
+        ))
 
     kpis = RadarKpis(
         mismatches=mismatches,
@@ -224,7 +252,7 @@ def book_radar(session: Session = Depends(get_session)) -> RadarResponse:
     call_list: list[RadarCallRow] = []
     for r in ranked[:_CALL_LIST_LIMIT]:
         mismatch = float(r["suitability_mismatch"] or 0)
-        status = "breach" if mismatch > 0 else "watch" if mismatch > -_WATCH_BAND else "ok"
+        status = mismatch_status(mismatch)
 
         goals = r["goals"] or []
         worst = min(goals, key=lambda g: g.get("success_prob", 1.0), default=None)
@@ -238,6 +266,7 @@ def book_radar(session: Session = Depends(get_session)) -> RadarResponse:
             tolerable_dd=abs(float(r["tolerable_dd"] or 0)),
             simulated_dd=abs(float(r["simulated_dd"] or 0)),
             mismatch=mismatch,
+            portfolio_value=float(r["portfolio_value"] or 0),
             flags=r["flags"] or [],
             top_category=cat,
             top_weight=weight,
@@ -245,6 +274,7 @@ def book_radar(session: Session = Depends(get_session)) -> RadarResponse:
             worst_goal_prob=worst.get("success_prob") if worst else None,
             off_track_goals=off_track_goals,
             status=status,
+            reason=r["reason"],
         ))
 
     return RadarResponse(
@@ -259,4 +289,124 @@ def book_radar(session: Session = Depends(get_session)) -> RadarResponse:
         heatmap=heatmap,
         goal_success_hist=goal_success_hist,
         call_list=call_list,
+        scatter=scatter,
     )
+
+
+# ── AI book insights ────────────────────────────────────────────────────────────
+@router.get("/insights", response_model=BookInsightsResponse)
+def book_insights(session: Session = Depends(get_session)) -> BookInsightsResponse:
+    """The cached LLM narrative for the latest scored day — the dashboard's morning
+    briefing + insight cards. Empty payload (not an error) if none have been generated."""
+    latest = session.execute(
+        text("select max(as_of_date) as d from book_insights")
+    ).scalar()
+    if latest is None:
+        return BookInsightsResponse(
+            as_of_date=None, headline=None, briefing=None, insights=[],
+            llm_configured=settings.llm_configured,
+        )
+
+    rows = session.execute(
+        text(
+            "select kind, severity, title, body, client_ids from book_insights "
+            "where as_of_date = :d order by id"
+        ),
+        {"d": latest},
+    ).mappings().all()
+    briefing_row = next((r for r in rows if r["kind"] == "briefing"), None)
+    insights = [
+        BookInsightItem(
+            kind=r["kind"], severity=r["severity"], title=r["title"] or "",
+            body=r["body"], client_ids=r["client_ids"] or [],
+        )
+        for r in rows if r["kind"] != "briefing"
+    ]
+    return BookInsightsResponse(
+        as_of_date=latest,
+        headline=briefing_row["title"] if briefing_row else None,
+        briefing=briefing_row["body"] if briefing_row else None,
+        insights=insights,
+        llm_configured=settings.llm_configured,
+    )
+
+
+@router.post("/insights/refresh", response_model=BookInsightsResponse)
+async def refresh_book_insights(session: Session = Depends(get_session)) -> BookInsightsResponse:
+    """Regenerate today's AI insights on demand, instead of waiting for the nightly run."""
+    if not settings.llm_configured:
+        raise HTTPException(
+            status_code=503,
+            detail="AI insights unavailable: set GEMINI_API_KEY (or LLM_API_KEY) on the backend.",
+        )
+    from ..llm.call_reasons import generate_call_reasons
+    from ..llm.insights import generate_book_insights
+
+    await generate_book_insights(session, date.today())
+    try:
+        await generate_call_reasons(session)
+    except Exception:
+        log.exception("call reason generation failed")
+    return book_insights(session)
+
+
+# ── Book trend (risk migration over time) ───────────────────────────────────────
+@router.get("/trend", response_model=BookTrendResponse)
+def book_trend(session: Session = Depends(get_session)) -> BookTrendResponse:
+    """Breach/watch/ok counts + AUM per scored day, plus who changed status between the
+    latest two runs — "is my book getting riskier" and "who newly needs a call"."""
+    dates = session.execute(
+        text("select distinct as_of_date from radar_snapshots order by as_of_date desc limit 60")
+    ).scalars().all()
+    dates = list(reversed(dates))
+
+    points: list[TrendPoint] = []
+    for d in dates:
+        rows = session.execute(
+            text(
+                "select suitability_mismatch, portfolio_value from radar_snapshots "
+                "where as_of_date = :d"
+            ),
+            {"d": d},
+        ).mappings().all()
+        counts = {"breach": 0, "watch": 0, "ok": 0}
+        aum = 0.0
+        for r in rows:
+            m = float(r["suitability_mismatch"]) if r["suitability_mismatch"] is not None else None
+            counts[mismatch_status(m)] += 1
+            aum += float(r["portfolio_value"] or 0)
+        points.append(TrendPoint(
+            as_of_date=d, breach=counts["breach"], watch=counts["watch"], ok=counts["ok"], aum=aum,
+        ))
+
+    movers: list[MoverRow] = []
+    if len(dates) >= 2:
+        current, prior = dates[-1], dates[-2]
+        rows = session.execute(
+            text(
+                """
+                select c.id, c.name, cur.suitability_mismatch as cur_m,
+                       prev.suitability_mismatch as prev_m
+                from radar_snapshots cur
+                join radar_snapshots prev
+                  on prev.client_id = cur.client_id and prev.as_of_date = :prior
+                join clients c on c.id = cur.client_id
+                where cur.as_of_date = :current
+                """
+            ),
+            {"current": current, "prior": prior},
+        ).mappings().all()
+        # 'breach' > 'watch' > 'ok' — a move to a higher-severity status is a worsening.
+        rank = {"ok": 0, "watch": 1, "breach": 2}
+        for r in rows:
+            before = mismatch_status(float(r["prev_m"]) if r["prev_m"] is not None else None)
+            after = mismatch_status(float(r["cur_m"]) if r["cur_m"] is not None else None)
+            if before == after:
+                continue
+            movers.append(MoverRow(
+                client_id=r["id"], name=r["name"],
+                direction="worsened" if rank[after] > rank[before] else "improved",
+                from_status=before, to_status=after,
+            ))
+
+    return BookTrendResponse(points=points, movers=movers)

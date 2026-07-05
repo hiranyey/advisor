@@ -25,6 +25,7 @@ from sim_kernel.whatif import Levers
 
 from ..config import settings
 from ..engine.loader import load_client_state, load_client_states
+from ..engine.radar_status import status as mismatch_status
 from ..gpu import client as gpu_client
 
 CATEGORY_MIN_WEIGHT = 0.15  # a client "has exposure to" a category above this weight
@@ -329,7 +330,7 @@ def rank_book(session: Session, limit: int = CALL_LIST_LIMIT) -> dict:
         text(
             """
             select c.id, c.name, c.risk_profile,
-                   r.suitability_mismatch, r.simulated_dd, r.tolerable_dd, r.flags, b.goals
+                   r.suitability_mismatch, r.simulated_dd, r.tolerable_dd, r.flags, r.reason, b.goals
             from radar_output r
             join clients c on c.id = r.client_id
             left join latest_baseline b on b.client_id = r.client_id
@@ -353,13 +354,97 @@ def rank_book(session: Session, limit: int = CALL_LIST_LIMIT) -> dict:
             "suitability_mismatch": mismatch,
             "simulated_dd": abs(_f(r["simulated_dd"])) if r["simulated_dd"] is not None else None,
             "tolerable_dd": abs(_f(r["tolerable_dd"])) if r["tolerable_dd"] is not None else None,
-            "status": "breach" if (mismatch or 0) > 0 else "watch" if (mismatch or 0) > -0.05 else "ok",
+            "status": mismatch_status(mismatch),
             "flags": r["flags"] or [],
             "worst_goal": worst.get("name") if worst else None,
             "worst_goal_prob": worst.get("success_prob") if worst else None,
             "off_track_goals": off_track,
+            "reason": r["reason"],
         })
     return {"count": len(call_list), "call_list": call_list}
+
+
+# ── get_book_insights ─────────────────────────────────────────────────────────
+def get_book_insights(session: Session) -> dict:
+    """The cached AI-generated book narrative (morning briefing + insight cards) for the
+    latest scored day — the same thing the dashboard shows. Ground answers about "what
+    stood out" or "why did you flag X" in this instead of re-deriving it from scratch."""
+    from ..llm.insights import strip_emphasis_tags
+
+    latest = session.execute(text("select max(as_of_date) as d from book_insights")).scalar()
+    if latest is None:
+        return {"as_of_date": None, "briefing": None, "insights": []}
+
+    rows = session.execute(
+        text(
+            "select kind, severity, title, body, client_ids from book_insights "
+            "where as_of_date = :d order by id"
+        ),
+        {"d": latest},
+    ).mappings().all()
+    briefing = strip_emphasis_tags(next((r["body"] for r in rows if r["kind"] == "briefing"), None))
+    insights = [
+        {
+            "kind": r["kind"], "severity": r["severity"], "title": r["title"],
+            "body": r["body"], "client_ids": r["client_ids"] or [],
+        }
+        for r in rows if r["kind"] != "briefing"
+    ]
+    return {"as_of_date": str(latest), "briefing": briefing, "insights": insights}
+
+
+# ── book_trend ────────────────────────────────────────────────────────────────
+def book_trend(session: Session, lookback_days: int = 30) -> dict:
+    """Breach/watch/ok counts over the last scored days, plus who changed status between
+    the latest two runs — answers "is my book getting riskier" and "who newly needs a call
+    since last time" using the append-only radar_snapshots history."""
+    dates = session.execute(
+        text(
+            "select distinct as_of_date from radar_snapshots "
+            "order by as_of_date desc limit :n"
+        ),
+        {"n": max(2, lookback_days)},
+    ).scalars().all()
+    dates = list(reversed(dates))
+
+    points = []
+    for d in dates:
+        rows = session.execute(
+            text("select suitability_mismatch from radar_snapshots where as_of_date = :d"),
+            {"d": d},
+        ).scalars().all()
+        counts = {"breach": 0, "watch": 0, "ok": 0}
+        for m in rows:
+            counts[mismatch_status(_f(m))] += 1
+        points.append({"as_of_date": str(d), **counts})
+
+    movers = []
+    if len(dates) >= 2:
+        current, prior = dates[-1], dates[-2]
+        rows = session.execute(
+            text(
+                """
+                select c.name, cur.suitability_mismatch as cur_m, prev.suitability_mismatch as prev_m
+                from radar_snapshots cur
+                join radar_snapshots prev
+                  on prev.client_id = cur.client_id and prev.as_of_date = :prior
+                join clients c on c.id = cur.client_id
+                where cur.as_of_date = :current
+                """
+            ),
+            {"current": current, "prior": prior},
+        ).mappings().all()
+        rank = {"ok": 0, "watch": 1, "breach": 2}
+        for r in rows:
+            before = mismatch_status(_f(r["prev_m"]))
+            after = mismatch_status(_f(r["cur_m"]))
+            if before != after:
+                movers.append({
+                    "name": r["name"], "from_status": before, "to_status": after,
+                    "direction": "worsened" if rank[after] > rank[before] else "improved",
+                })
+
+    return {"points": points, "movers": movers}
 
 
 # ── add_transactions (parse only — never writes) ──────────────────────────────

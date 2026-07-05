@@ -21,17 +21,27 @@ from app import scheduler
 from app.api import book, clients, conversations, copilot
 from app.api.copilot import JOBS
 from app.db import Base, engine
-from app.models import CopilotConversation, CopilotMessage
+from app.models import BookInsight, CopilotConversation, CopilotMessage, RadarSnapshot
 from app.tasks.refresh_navs import refresh_navs
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Ensure the Copilot persistence tables exist (idempotent) so an already-seeded DB
-    # gains conversation history without a full reseed. seed.py create_all covers a fresh DB.
+    # Ensure tables added after the initial seed exist (idempotent) so an already-seeded
+    # DB gains them without a full reseed. seed.py create_all covers a fresh DB.
     Base.metadata.create_all(
-        engine, tables=[CopilotConversation.__table__, CopilotMessage.__table__]
+        engine,
+        tables=[
+            CopilotConversation.__table__,
+            CopilotMessage.__table__,
+            RadarSnapshot.__table__,
+            BookInsight.__table__,
+        ],
     )
+    # Columns added to an already-existing table after the initial seed — create_all
+    # only creates whole tables, so these need an explicit (idempotent) patch.
+    with engine.begin() as conn:
+        conn.exec_driver_sql("alter table radar_output add column if not exists reason text")
     scheduler.start()
     try:
         yield

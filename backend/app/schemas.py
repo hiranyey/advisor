@@ -194,6 +194,18 @@ class HistBucket(BaseModel):
     count: int
 
 
+class ScatterPoint(BaseModel):
+    """One dot in the book-wide risk-vs-goal-success quadrant — every scored client, not
+    just the call-list top N."""
+
+    client_id: int
+    name: str
+    risk_profile: str
+    mismatch: float  # simulated − tolerable (>0 = over-exposed) — the x axis
+    worst_goal_prob: float | None  # this client's worst goal success prob — the y axis
+    portfolio_value: float  # drives dot radius
+
+
 class RadarCallRow(BaseModel):
     client_id: int
     name: str
@@ -201,6 +213,7 @@ class RadarCallRow(BaseModel):
     tolerable_dd: float  # magnitude
     simulated_dd: float  # magnitude (simulated 1-yr worst case)
     mismatch: float  # simulated − tolerable (>0 = over-exposed)
+    portfolio_value: float  # ₹ — lets the UI show real money at risk, not just a % gap
     flags: list[str]
     top_category: str | None  # dominant exposure (the driver)
     top_weight: float
@@ -208,6 +221,7 @@ class RadarCallRow(BaseModel):
     worst_goal_prob: float | None
     off_track_goals: int
     status: str  # 'breach' | 'watch' | 'ok'
+    reason: str | None  # short LLM-written "why call them"; null until generated
 
 
 class RadarResponse(BaseModel):
@@ -222,6 +236,46 @@ class RadarResponse(BaseModel):
     heatmap: list[HeatmapRow]
     goal_success_hist: list[HistBucket]
     call_list: list[RadarCallRow]
+    scatter: list[ScatterPoint]
+
+
+# ── AI book insights (cached LLM narrative) ───────────────────────────────────
+class BookInsightItem(BaseModel):
+    kind: str  # 'risk' | 'concentration' | 'goals' | 'opportunity'
+    severity: str  # 'good' | 'info' | 'watch' | 'critical'
+    title: str
+    body: str
+    client_ids: list[int] = []
+
+
+class BookInsightsResponse(BaseModel):
+    as_of_date: date | None  # null if no insights have been generated yet
+    headline: str | None  # one punchy line, may contain {{tag:span}} emphasis markup
+    briefing: str | None  # the fuller paragraph, may also contain emphasis markup
+    insights: list[BookInsightItem] = []
+    llm_configured: bool
+
+
+# ── Book trend (risk migration over time) ─────────────────────────────────────
+class TrendPoint(BaseModel):
+    as_of_date: date
+    breach: int
+    watch: int
+    ok: int
+    aum: float
+
+
+class MoverRow(BaseModel):
+    client_id: int
+    name: str
+    direction: str  # 'worsened' | 'improved'
+    from_status: str
+    to_status: str
+
+
+class BookTrendResponse(BaseModel):
+    points: list[TrendPoint]
+    movers: list[MoverRow]
 
 
 # ── Copilot (six-tool LLM loop) ───────────────────────────────────────────────

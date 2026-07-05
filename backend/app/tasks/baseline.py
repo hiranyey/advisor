@@ -18,7 +18,9 @@ per client. `fund_value`/`category_value` (for concentration flags) never leave 
 process; they're joined back onto the job's per-client results below.
 """
 
+import asyncio
 import json
+import logging
 from datetime import date
 
 from sqlalchemy import text
@@ -30,6 +32,8 @@ from ..db import SessionLocal
 from ..engine import market
 from ..engine.loader import load_client_states
 from ..gpu import client as gpu_client
+
+log = logging.getLogger(__name__)
 
 OFF_TRACK_PROB = 0.50  # a goal under this success probability is "off track"
 
@@ -125,6 +129,23 @@ def run_book_analysis(session=None, as_of: date | None = None) -> dict:
                     "flags": json.dumps(r["radar"]["flags"]),
                 },
             )
+            worst_goal_prob = min(
+                (g["success_prob"] for g in r["goals"] if g.get("success_prob") is not None),
+                default=None,
+            )
+            session.execute(
+                _SNAPSHOT_UPSERT,
+                {
+                    "client_id": r["client_id"],
+                    "as_of_date": r["as_of_date"],
+                    "suitability_mismatch": r["suitability_mismatch"],
+                    "tolerable_dd": r["radar"]["tolerable_dd"],
+                    "simulated_dd": r["radar"]["simulated_dd"],
+                    "flags": json.dumps(r["radar"]["flags"]),
+                    "worst_goal_prob": worst_goal_prob,
+                    "portfolio_value": state.total,
+                },
+            )
             if i % 50 == 0:
                 print(f"  ...{i}/{len(states)}")
 
@@ -137,6 +158,25 @@ def run_book_analysis(session=None, as_of: date | None = None) -> dict:
             "n_paths": job["n_paths"],
         }
         print(f"[baseline] done: {stats}")
+
+        # AI book insights + call-list reasons — best-effort. An LLM hiccup must not fail
+        # the nightly numeric job; the dashboard just falls back to cached/prior values.
+        try:
+            from ..llm.insights import generate_book_insights
+
+            asyncio.run(generate_book_insights(session, as_of))
+            print("[baseline] book insights refreshed")
+        except Exception:
+            log.exception("book insight generation failed")
+
+        try:
+            from ..llm.call_reasons import generate_call_reasons
+
+            asyncio.run(generate_call_reasons(session))
+            print("[baseline] call reasons refreshed")
+        except Exception:
+            log.exception("call reason generation failed")
+
         return stats
     finally:
         if own_session:
@@ -169,6 +209,22 @@ _RADAR_UPSERT = text("""
       tolerable_dd = excluded.tolerable_dd,
       simulated_dd = excluded.simulated_dd,
       flags = excluded.flags, updated_at = now()
+""")
+
+_SNAPSHOT_UPSERT = text("""
+    insert into radar_snapshots
+      (client_id, as_of_date, suitability_mismatch, tolerable_dd, simulated_dd, flags,
+       worst_goal_prob, portfolio_value)
+    values
+      (:client_id, :as_of_date, :suitability_mismatch, :tolerable_dd, :simulated_dd,
+       cast(:flags as jsonb), :worst_goal_prob, :portfolio_value)
+    on conflict (client_id, as_of_date) do update set
+      suitability_mismatch = excluded.suitability_mismatch,
+      tolerable_dd = excluded.tolerable_dd,
+      simulated_dd = excluded.simulated_dd,
+      flags = excluded.flags,
+      worst_goal_prob = excluded.worst_goal_prob,
+      portfolio_value = excluded.portfolio_value
 """)
 
 

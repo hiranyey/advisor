@@ -6,7 +6,8 @@ endpoints do (tools/impl.py). Every tool call + its result is captured as a visi
 so the frontend can render the reasoning, not just the final sentence.
 
 Tool set (IMPLEMENTATION.md §7): query_book · get_client_brief · run_whatif ·
-stress_book · rank_book · add_transactions.
+stress_book · rank_book · add_transactions. Plus two dashboard-grounding tools:
+get_book_insights · book_trend.
 """
 
 from __future__ import annotations
@@ -54,6 +55,11 @@ Your tools:
 - rank_book: the suitability-mismatch "who do I call first" list.
 - add_transactions: parse plain-English fund activity into rows for the advisor to confirm
   (this parses only; it does NOT commit).
+- get_book_insights: the cached AI-written morning briefing + insight cards shown on the
+  dashboard — use this to ground "what stood out" / "why did you flag X" questions instead
+  of re-deriving an opinion yourself.
+- book_trend: breach/watch/ok counts over recent scored days plus who changed status since
+  the last run — use this for "is my book getting riskier" / "who newly needs a call."
 
 When the advisor names a client but gives no id (the id is not written as "client id N"),
 first call query_book with `name` to resolve them to a client_id, then use that id with the
@@ -170,6 +176,19 @@ def _agent():
     def rank_book(ctx: RunContext[CopilotDeps], limit: int = 25) -> dict:
         """The book-wide suitability-mismatch call list — who to call first, and why."""
         return impl.rank_book(ctx.deps.session, limit)
+
+    @agent.tool
+    def get_book_insights(ctx: RunContext[CopilotDeps]) -> dict:
+        """The cached AI-written morning briefing + insight cards shown on the dashboard
+        for the latest scored day. Use this to ground questions about what's notable in
+        the book right now instead of forming a fresh opinion."""
+        return impl.get_book_insights(ctx.deps.session)
+
+    @agent.tool
+    def book_trend(ctx: RunContext[CopilotDeps], lookback_days: int = 30) -> dict:
+        """Breach/watch/ok client counts per scored day over the recent history, plus who
+        moved between statuses between the latest two runs (newly breached / recovered)."""
+        return impl.book_trend(ctx.deps.session, lookback_days)
 
     @agent.tool
     async def add_transactions(ctx: RunContext[CopilotDeps], client_id: int, text: str) -> dict:
