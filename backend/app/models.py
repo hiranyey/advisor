@@ -28,8 +28,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from sim_kernel.categories import CATEGORIES
+
 from .db import Base
-from .engine.categories import CATEGORIES
 
 _CATEGORY_CHECK = "category in (" + ", ".join(f"'{c}'" for c in CATEGORIES) + ")"
 

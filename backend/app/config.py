@@ -16,6 +16,12 @@ def _env_bool(name: str, default: bool = False) -> bool:
 # two things: whether the market model is *derived nightly* from NAV history (GPU) or
 # read from the hardcoded fallback table (CPU), and how many Monte Carlo paths we run
 # (50k on GPU, a lighter count on CPU so the demo stays snappy).
+#
+# The backend process itself never imports cupy anymore — the Monte Carlo math lives in
+# `sim_kernel` and runs either in-process (numpy, local dev) or on a RunPod serverless
+# GPU worker (see `app/gpu/`). `Settings.runpod_configured` below is the actual switch
+# `app/gpu/client.py` checks; if RunPod isn't configured it degrades to local numpy, the
+# same safe-degrade the old cupy ImportError used to do.
 _GPU = _env_bool("IS_GPU_AVAILABLE", False)
 
 
@@ -60,6 +66,12 @@ class Settings:
     gcs_region: str = os.getenv("GCS_REGION", "asia-southeast1")
     gcs_endpoint_url: str = os.getenv("GCS_ENDPOINT_URL", "https://storage.googleapis.com")
 
+    # RunPod serverless — where the actual GPU simulate() runs (see app/gpu/). Job
+    # payloads (14-vectors, a handful of goals) are well under RunPod's 10MB/run and
+    # 20MB/runsync body limits, so they travel as plain POST JSON — no object storage.
+    runpod_api_key: str | None = os.getenv("RUNPOD_API_KEY")
+    runpod_endpoint_id: str | None = os.getenv("RUNPOD_ENDPOINT_ID")
+
     @property
     def llm_configured(self) -> bool:
         return bool(self.llm_api_key)
@@ -67,6 +79,10 @@ class Settings:
     @property
     def gcs_configured(self) -> bool:
         return bool(self.gcs_access_key and self.gcs_access_secret)
+
+    @property
+    def runpod_configured(self) -> bool:
+        return bool(self.runpod_api_key and self.runpod_endpoint_id)
 
 
 settings = Settings()

@@ -24,14 +24,13 @@ The levers (all optional, matching the `run_whatif` tool schema in IMPLEMENTATIO
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
 from . import pipelines
 from .categories import CAT_INDEX, N_CATEGORIES
-from .loader import ClientState, GoalState
-from .market import MarketModel
+from .state import ClientState, GoalState, MarketModel
 from .montecarlo import simulate
 
 RISK_HORIZON_MONTHS = 12  # matches insights/baseline: portfolio downside is measured over a year
@@ -86,6 +85,21 @@ class Levers:
                 )
             )
         return out
+
+    def to_payload(self) -> dict:
+        return {
+            "sip_delta": self.sip_delta, "lump_sum": self.lump_sum,
+            "reallocate": self.reallocate, "reduce_concentration": self.reduce_concentration,
+            "horizon_shift": self.horizon_shift, "return_shock": self.return_shock,
+        }
+
+    @staticmethod
+    def from_payload(d: dict) -> "Levers":
+        return Levers(
+            sip_delta=float(d.get("sip_delta") or 0), lump_sum=float(d.get("lump_sum") or 0),
+            reallocate=d.get("reallocate"), reduce_concentration=d.get("reduce_concentration"),
+            horizon_shift=int(d.get("horizon_shift") or 0), return_shock=d.get("return_shock"),
+        )
 
 
 def _as_fraction(x: float) -> float:

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_session
-from ..engine.backend import BACKEND
+from ..gpu.client import backend_label
 from ..schemas import (
     BookSummary,
     CategoryAllocation,
@@ -251,7 +251,7 @@ def book_radar(session: Session = Depends(get_session)) -> RadarResponse:
         as_of_date=as_of,
         n_paths=n_paths,
         total_paths=clients_scored * (n_paths or 0),
-        backend=BACKEND,
+        backend=backend_label(),
         market_source="derived" if settings.is_gpu_available else "fallback",
         clients_scored=clients_scored,
         heatmap_columns=_HEATMAP_COLUMNS,

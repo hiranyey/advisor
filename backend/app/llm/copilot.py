@@ -11,6 +11,7 @@ stress_book · rank_book · add_transactions.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
@@ -18,10 +19,10 @@ from functools import lru_cache
 from pydantic_ai import Agent, RunContext
 from sqlalchemy.orm import Session
 
-from ..engine.backend import BACKEND
-from ..engine.categories import CATEGORIES
-from ..engine.market import MarketModel
-from ..engine.montecarlo import timer
+from sim_kernel.categories import CATEGORIES
+from sim_kernel.state import MarketModel
+
+from ..gpu.client import backend_label
 from ..tools import impl
 
 _SYSTEM = f"""
@@ -223,11 +224,11 @@ def run_copilot(
     to a clear 503."""
     agent = _agent()
     deps = CopilotDeps(session=session, model=model, client_id=client_id)
-    with timer() as elapsed:
-        result = agent.run_sync(message, message_history=_to_messages(history), deps=deps)
+    start = time.perf_counter()
+    result = agent.run_sync(message, message_history=_to_messages(history), deps=deps)
     return {
         "answer": result.output,
         "trace": _extract_trace(result),
-        "elapsed_ms": round(elapsed() * 1000, 1),
-        "backend": BACKEND,
+        "elapsed_ms": round((time.perf_counter() - start) * 1000, 1),
+        "backend": backend_label(),
     }

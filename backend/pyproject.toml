@@ -7,15 +7,22 @@ requires-python = ">=3.14"
 dependencies = [
     "apscheduler>=3.11.3",
     "boto3>=1.43.40",
-    "cupy-cuda12x[ctk]>=14.1.1",
     "fastapi[standard]>=0.139.0",
     "httpx>=0.28.1",
     "numpy>=2.5.0",
     "psycopg[binary]>=3.3.4",
     "pydantic-ai-slim[google]>=2.5.0",
     "python-dotenv>=1.2.2",
+    "sim-kernel",
     "sqlalchemy>=2.0.51",
 ]
+
+# The Monte Carlo engine now lives in ../sim_kernel — the same package the RunPod worker
+# image runs. The backend process only ever runs its CPU (numpy) path locally; it never
+# imports cupy itself, so `cupy-cuda12x` is no longer a backend dependency (see
+# ../gpu_worker for the GPU-enabled image).
+[tool.uv.sources]
+sim-kernel = { path = "../sim_kernel" }
 
 [tool.pyright]
 pythonVersion = "3.14"

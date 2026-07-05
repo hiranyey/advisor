@@ -13,8 +13,9 @@ import csv
 import sys
 from pathlib import Path
 
+from sim_kernel.categories import CATEGORIES
+
 from app.db import Base, engine
-from app.engine.categories import CATEGORIES
 from app.models import Fund, NavHistory  # noqa: F401 — register tables on Base
 
 DATA_DIR = Path(__file__).resolve().parent  # CSVs live alongside this script

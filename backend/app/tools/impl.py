@@ -15,17 +15,17 @@ from __future__ import annotations
 
 from datetime import date
 
-import numpy as np
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from sim_kernel import pipelines
+from sim_kernel.categories import CAT_INDEX
+from sim_kernel.state import MarketModel
+from sim_kernel.whatif import Levers
+
 from ..config import settings
-from ..engine import pipelines, whatif
-from ..engine.backend import BACKEND
-from ..engine.categories import CAT_INDEX
 from ..engine.loader import load_client_state, load_client_states
-from ..engine.market import MarketModel
-from ..engine.montecarlo import timer
+from ..gpu import client as gpu_client
 
 CATEGORY_MIN_WEIGHT = 0.15  # a client "has exposure to" a category above this weight
 CALL_LIST_LIMIT = 25
@@ -255,7 +255,7 @@ def run_whatif(
     if state is None:
         return {"error": f"client {client_id} not found"}
 
-    levers = whatif.Levers(
+    levers = Levers(
         sip_delta=float(sip_delta or 0),
         lump_sum=float(lump_sum or 0),
         reallocate=reallocate,
@@ -263,13 +263,7 @@ def run_whatif(
         horizon_shift=int(horizon_shift or 0),
         return_shock=return_shock,
     )
-    with timer() as elapsed:
-        result = whatif.run_whatif(state, model, levers, settings.mc_n_paths, settings.mc_seed)
-    result.update(
-        backend=BACKEND, n_paths=settings.mc_n_paths, seed=settings.mc_seed,
-        elapsed_ms=round(elapsed() * 1000, 1),
-    )
-    return result
+    return gpu_client.whatif(state, model, levers, n_paths=settings.mc_n_paths, seed=settings.mc_seed)
 
 
 # ── stress_book ───────────────────────────────────────────────────────────────
@@ -292,7 +286,15 @@ def stress_book(
         states = [s for s in states if s.risk_profile == risk_profile]
 
     deterministic = not bool(shock.get("monte_carlo") or shock.get("mc"))
-    breaches = pipelines.stress_book(states, shock, deterministic=deterministic)
+    if deterministic:
+        # Plain weight×shock arithmetic — no simulate() call, so this never leaves the
+        # backend process (there's nothing for a GPU to accelerate here).
+        breaches = pipelines.stress_book(states, shock)
+    else:
+        result = gpu_client.book_stress(
+            states, model, shock, n_paths=settings.mc_n_paths, seed=settings.mc_seed,
+        )
+        breaches = result["breaches"]
 
     names = {s.id: s.name for s in states}
     profiles = {s.id: s.risk_profile for s in states}

@@ -9,18 +9,21 @@ produces `ClientState` objects (whole-book or single-client) with:
 * `fund_value` / `category_value` for concentration checks.
 
 `mu` and `L` come from the market model and are attached here so a state is self-contained
-enough to hand straight to `simulate()` / `stress_book()`.
+enough to hand straight to `simulate()` / `stress_book()` — or to `ClientState.to_payload()`
+for a GPU job. `ClientState`/`GoalState` themselves are pure dataclasses defined in
+`sim_kernel.state` (shared with the RunPod worker); this module only builds them from SQL.
 """
 
-from dataclasses import dataclass, field
 from datetime import date
 
 import numpy as np
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from .categories import CAT_INDEX, N_CATEGORIES
-from .market import MarketModel
+from sim_kernel.categories import CAT_INDEX, N_CATEGORIES
+from sim_kernel.state import ClientState, GoalState, MarketModel
+
+__all__ = ["ClientState", "GoalState", "load_client_states", "load_client_state"]
 
 
 def _horizon_months(target: date | None, as_of: date) -> int:
@@ -28,44 +31,6 @@ def _horizon_months(target: date | None, as_of: date) -> int:
         return 1
     months = (target.year - as_of.year) * 12 + (target.month - as_of.month)
     return max(months, 1)
-
-
-@dataclass
-class GoalState:
-    goal_id: int
-    name: str | None
-    target_amount: float
-    horizon_months: int
-    holdings: np.ndarray                  # (14,) ₹ per category, this goal's funds only
-    monthly_sip: np.ndarray              # (14,)
-    stepup_rate: float = 0.0
-
-    @property
-    def start_value(self) -> float:
-        return float(self.holdings.sum())
-
-
-@dataclass
-class ClientState:
-    id: int
-    name: str
-    risk_profile: str
-    holdings: np.ndarray                  # (14,) ₹ per category (whole portfolio)
-    monthly_sip: np.ndarray              # (14,)
-    stepup_rate: float
-    fund_value: dict                     # {fund_id: ₹}  (for concentration)
-    category_value: dict                 # {category_tag: ₹}  (nonzero only)
-    goals: list[GoalState] = field(default_factory=list)
-    mu: np.ndarray | None = None         # attached from the market model
-    L: np.ndarray | None = None
-
-    @property
-    def total(self) -> float:
-        return float(self.holdings.sum())
-
-    def with_market(self, model: MarketModel) -> "ClientState":
-        self.mu, self.L = model.mu, model.L
-        return self
 
 
 def _weighted_stepup(rows: list[tuple]) -> float:

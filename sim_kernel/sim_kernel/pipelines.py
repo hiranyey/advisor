@@ -13,12 +13,14 @@ exceeds what their risk profile tolerates, i.e. over-exposed.
 
 import numpy as np
 
-from ..config import settings
 from .categories import CAT_INDEX
 from .montecarlo import simulate
 
 # Worst peacetime drawdown a profile should stomach (positive magnitudes).
 TOLERABLE_DD = {"conservative": 0.10, "balanced": 0.20, "aggressive": 0.35}
+
+DEFAULT_CONFIDENCE = 0.80  # required-SIP target
+DEFAULT_VAR_PCT = 0.05     # tail percentile for VaR/CVaR
 
 
 # ── Per-goal statistics ──────────────────────────────────────────────────────
@@ -44,7 +46,7 @@ def shortfall(terminals, target) -> dict:
 
 def required_sip(
     holdings, mu, L, target, horizon_months, weights,
-    confidence: float | None = None, hi: float | None = None, iters: int = 20, **sim_kw
+    confidence: float = DEFAULT_CONFIDENCE, hi: float | None = None, iters: int = 20, **sim_kw
 ) -> float:
     """Bisect the total monthly SIP needed to lift success probability to `confidence`.
 
@@ -52,7 +54,6 @@ def required_sip(
     goal's current holdings mix so extra money follows the existing strategy. Returns ₹
     of total monthly contribution; `hi` (auto if omitted) is the upper search bound.
     """
-    confidence = settings.mc_confidence if confidence is None else confidence
     weights = np.asarray(weights, dtype=float)
     if hi is None:
         hi = target / max(horizon_months, 1) + 1e4  # enough to fund the goal from SIP alone
@@ -71,12 +72,11 @@ def required_sip(
 
 
 # ── Per-client risk statistics ───────────────────────────────────────────────
-def var_cvar(terminals, start_value, pct: float | None = None) -> tuple[float, float]:
+def var_cvar(terminals, start_value, pct: float = DEFAULT_VAR_PCT) -> tuple[float, float]:
     """VaR and CVaR as positive loss fractions of the starting value.
 
     VaR = loss not exceeded in (1-pct) of futures; CVaR = mean loss in the worst `pct`.
     """
-    pct = settings.mc_var_pct if pct is None else pct
     if start_value <= 0:
         return 0.0, 0.0
     losses = (start_value - terminals) / start_value  # >0 == a loss
@@ -86,7 +86,7 @@ def var_cvar(terminals, start_value, pct: float | None = None) -> tuple[float, f
     return var, cvar
 
 
-def simulated_drawdown(terminals, start_value, pct: float | None = None) -> float:
+def simulated_drawdown(terminals, start_value, pct: float = DEFAULT_VAR_PCT) -> float:
     """The downside used for suitability: worst-case (P-tail) loss magnitude, clipped at 0."""
     var, _ = var_cvar(terminals, start_value, pct)
     return max(var, 0.0)
@@ -109,37 +109,31 @@ def concentration_flags(fund_values: dict, category_values: dict, total: float) 
     return flags
 
 
-# ── Book-wide stress ─────────────────────────────────────────────────────────
-def stress_book(clients, shock: dict, deterministic: bool = True) -> list[dict]:
+# ── Book-wide stress (deterministic) ──────────────────────────────────────────
+# The Monte Carlo mode (correlated spillover via Σ) lives in `jobs.py:book_stress` —
+# it needs to batch `simulate()` calls across clients, which belongs next to the other
+# batching logic, not here. This stays the plain, GPU-free weight×shock arithmetic path.
+def stress_book(clients, shock: dict) -> list[dict]:
     """Apply one market shock across every client; return the ranked breach list.
 
-    `shock`: {category_tag: delta, ..., 'horizon_months': int}. Deterministic mode is
-    instant weight×shock arithmetic (the literal "small-cap drops 20%" question); the MC
-    mode adds correlated spillover via Σ. Both return clients whose loss breaches their
-    tolerance, worst first.
+    `shock`: {category_tag: delta, ..., 'horizon_months': int} (horizon is ignored here —
+    deterministic mode is instant, not a simulation). Instant weight×shock arithmetic
+    (the literal "small-cap drops 20%" question) — returns clients whose loss breaches
+    their tolerance, worst first.
 
-    Each `client` is a ClientState (see engine/loader.py): needs `id`, `risk_profile`,
-    `total`, `category_value` {tag: ₹}, and (MC mode) `holdings`, `mu`, `L`.
+    Each `client` is a ClientState (see state.py): needs `id`, `risk_profile`, `total`,
+    `category_value` {tag: ₹}.
     """
-    horizon = int(shock.get("horizon_months", 0)) if not deterministic else 0
     deltas_by_tag = {k: v for k, v in shock.items() if k in CAT_INDEX}
 
     out = []
     for c in clients:
         if c.total <= 0:
             continue
-        if deterministic:
-            loss = sum(
-                c.category_value.get(tag, 0.0) / c.total * -delta
-                for tag, delta in deltas_by_tag.items()
-            )  # positive == a loss (negative delta -> positive loss)
-        else:
-            deltas = {CAT_INDEX[tag]: d for tag, d in deltas_by_tag.items()}
-            terminals = simulate(
-                c.holdings, c.mu, c.L, np.zeros_like(c.holdings),
-                horizon_months=max(horizon, 1), shock={"month": 0, "deltas": deltas},
-            )
-            loss = (c.total - float(np.quantile(terminals, 0.05))) / c.total
+        loss = sum(
+            c.category_value.get(tag, 0.0) / c.total * -delta
+            for tag, delta in deltas_by_tag.items()
+        )  # positive == a loss (negative delta -> positive loss)
 
         tol = TOLERABLE_DD.get(c.risk_profile, TOLERABLE_DD["balanced"])
         if loss > tol:  # breach: simulated loss exceeds tolerance

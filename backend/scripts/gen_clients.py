@@ -33,8 +33,9 @@ from random import Random
 
 from sqlalchemy import text
 
+from sim_kernel.state import FALLBACK_MU
+
 from app.db import SessionLocal
-from app.engine.market import FALLBACK_MU
 from app.models import Client, Goal, GoalHolding, SipSchedule, Transaction
 
 SEED = 42
