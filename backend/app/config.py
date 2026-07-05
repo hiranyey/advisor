@@ -53,9 +53,20 @@ class Settings:
     llm_api_key: str | None = os.getenv("LLM_API_KEY") or os.getenv("GEMINI_API_KEY")
     llm_model: str = os.getenv("LLM_MODEL", "gemini-3.5-flash")
 
+    # GCS via its S3-interoperability API (HMAC keys, not a service-account key file).
+    gcs_access_key: str | None = os.getenv("ACCESS_KEY")
+    gcs_access_secret: str | None = os.getenv("ACCESS_SECRET")
+    gcs_bucket: str = os.getenv("GCS_BUCKET", "advisor-hiranyey")
+    gcs_region: str = os.getenv("GCS_REGION", "asia-southeast1")
+    gcs_endpoint_url: str = os.getenv("GCS_ENDPOINT_URL", "https://storage.googleapis.com")
+
     @property
     def llm_configured(self) -> bool:
         return bool(self.llm_api_key)
+
+    @property
+    def gcs_configured(self) -> bool:
+        return bool(self.gcs_access_key and self.gcs_access_secret)
 
 
 settings = Settings()
