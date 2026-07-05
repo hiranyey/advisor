@@ -1,10 +1,11 @@
 // Fetch wrappers for the AdvisorOS read APIs + formatting helpers.
-// Override the base with VITE_API_BASE (the FastAPI dev server defaults to :8000).
-
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
+// Defaults to same-origin /api, which is where FastAPI serves both the built SPA and
+// the API in the single-container deploy. Local `vite dev` overrides this to point at
+// the standalone FastAPI dev server — see .env.development.
+const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
 
 async function get(path, params) {
-	const url = new URL(API_BASE + path);
+	const url = new URL(API_BASE + path, window.location.origin);
 	if (params) {
 		for (const [k, v] of Object.entries(params)) {
 			if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
