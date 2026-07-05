@@ -2,6 +2,7 @@
 	// Renders one Copilot tool call as a labelled result card — the "visible tool-call
 	// trace" from IMPLEMENTATION.md §9. Each of the six tools gets its own body; the raw
 	// JSON is always available behind a details disclosure for the demo.
+	import { goto } from '$app/navigation';
 	import { inr, inrFull, pct, catLabel } from '$lib/api.js';
 	import {
 		Search,
@@ -77,7 +78,7 @@
 				<thead><tr><th>Client</th><th>Profile</th><th class="r">Downside</th><th class="r">Mismatch</th><th>Worst goal</th></tr></thead>
 				<tbody>
 					{#each list.slice(0, 8) as c}
-						<tr>
+						<tr class="rowlink" onclick={() => goto(`/clients/${c.client_id}`)}>
 							<td class="name">{c.name}</td>
 							<td><span class="pill {profileClass(c.risk_profile)}">{c.risk_profile}</span></td>
 							<td class="r num">{pct(c.simulated_dd, 0)}</td>
@@ -97,7 +98,7 @@
 				<thead><tr><th>Client</th><th>Profile</th><th class="r">Value</th><th>Top exposure</th><th class="r">Mismatch</th></tr></thead>
 				<tbody>
 					{#each list.slice(0, 8) as c}
-						<tr>
+						<tr class="rowlink" onclick={() => goto(`/clients/${c.client_id}`)}>
 							<td class="name">{c.name}</td>
 							<td><span class="pill {profileClass(c.risk_profile)}">{c.risk_profile}</span></td>
 							<td class="r num">{inr(c.portfolio_value)}</td>
@@ -200,7 +201,7 @@
 					<thead><tr><th>Client</th><th>Profile</th><th class="r">Loss</th><th class="r">Tolerable</th><th class="r">Over by</th></tr></thead>
 					<tbody>
 						{#each result.ranked.slice(0, 8) as c}
-							<tr>
+							<tr class="rowlink" onclick={() => goto(`/clients/${c.client_id}`)}>
 								<td class="name">{c.name}</td>
 								<td><span class="pill {profileClass(c.risk_profile)}">{c.risk_profile}</span></td>
 								<td class="r num cr-text">{pct(c.loss, 0)}</td>
@@ -333,6 +334,12 @@
 	}
 	.tool td.name {
 		font-size: 13.5px;
+	}
+	tr.rowlink {
+		transition: background-color 120ms ease;
+	}
+	tr.rowlink:hover td.name {
+		color: var(--brand-strong);
 	}
 	.dimc {
 		color: var(--mut);

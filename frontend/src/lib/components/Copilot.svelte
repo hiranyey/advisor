@@ -3,6 +3,8 @@
 	// the visible tool-call trace (as result cards), and the GPU-vs-CPU timing. Both
 	// what-if and stress come back on the same surface: a message in, rich cards back.
 	import { tick, onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { api } from '$lib/api.js';
 	import ToolResult from './ToolResult.svelte';
 	import AnswerBody from './AnswerBody.svelte';
@@ -30,6 +32,26 @@
 	let conversations = $state([]);
 	let currentId = $state(null);
 	onMount(loadConversations);
+
+	// The open conversation lives in `?c=<id>` so the browser's back/forward buttons
+	// step through conversations instead of dumping the user back on the empty state
+	// after they navigate away (e.g. to a client page) and return. `syncUrl` is the only
+	// writer of `c`; this effect is the only reader — it fires on our own writes too, but
+	// currentId is always updated first, so the id already matches and it's a no-op.
+	$effect(() => {
+		const raw = page.url.searchParams.get('c');
+		const cid = raw ? Number(raw) : null;
+		if (cid === currentId) return;
+		if (cid) openChat(cid, { push: false });
+		else resetChat();
+	});
+
+	function syncUrl(id, { push = false } = {}) {
+		const params = new URLSearchParams(page.url.searchParams);
+		if (id) params.set('c', id);
+		else params.delete('c');
+		goto(`?${params.toString()}`, { replaceState: !push, keepFocus: true, noScroll: true });
+	}
 
 	// A playful "working" status while the (non-streaming) turn runs — cycles phrases so
 	// the wait feels like the engine is actually doing something (it is).
@@ -100,6 +122,7 @@
 				conversation_id: currentId
 			});
 			currentId = res.conversation_id;
+			syncUrl(currentId);
 			messages.push({
 				role: 'assistant',
 				content: res.answer,
@@ -125,7 +148,7 @@
 		}
 	}
 
-	function newChat() {
+	function resetChat() {
 		messages = [];
 		mentions = [];
 		input = '';
@@ -133,7 +156,12 @@
 		closeMentions();
 	}
 
-	async function openChat(id) {
+	function newChat() {
+		resetChat();
+		syncUrl(null, { push: true });
+	}
+
+	async function openChat(id, { push = true } = {}) {
 		if (id === currentId) return;
 		try {
 			const conv = await api.getConversation(id);
@@ -142,6 +170,7 @@
 			mentions = [];
 			input = '';
 			closeMentions();
+			syncUrl(id, { push });
 			await scrollDown();
 		} catch (e) {
 			toast = `Couldn't open conversation: ${e.message}`;

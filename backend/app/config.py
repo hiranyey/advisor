@@ -41,7 +41,7 @@ class Settings:
     # Monte Carlo controls. n_paths is the main speed/precision lever: full 50k on GPU,
     # a lighter count on CPU (env MC_N_PATHS_CPU) so a local demo stays ~1s.
     mc_n_paths: int = int(
-        os.getenv("MC_N_PATHS", "50000") if _GPU else os.getenv("MC_N_PATHS_CPU", "8000")
+        os.getenv("MC_N_PATHS", "500000") if _GPU else os.getenv("MC_N_PATHS_CPU", "8000")
     )
     mc_seed: int = int(os.getenv("MC_SEED", "42"))
     mc_steps_per_year: int = int(os.getenv("MC_STEPS_PER_YEAR", "12"))
