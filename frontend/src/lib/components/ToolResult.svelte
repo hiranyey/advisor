@@ -250,6 +250,25 @@
 		box-shadow: var(--shadow-stamp-sm);
 		padding: 12px 14px 14px;
 		margin: 10px 0;
+		animation: cardIn 0.32s var(--ease-out) both;
+	}
+	@keyframes cardIn {
+		from {
+			opacity: 0;
+			transform: translateY(8px);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+	@keyframes growx {
+		from {
+			transform: scaleX(0);
+		}
+		to {
+			transform: scaleX(1);
+		}
 	}
 	.toolhead {
 		display: flex;
@@ -419,6 +438,8 @@
 	.fill {
 		height: 100%;
 		background: var(--brand);
+		transform-origin: left center;
+		animation: growx 0.55s var(--ease-out) both;
 	}
 	.fill.good {
 		background: var(--inflow);
@@ -562,10 +583,17 @@
 		box-shadow: var(--shadow-stamp-sm);
 		padding: 9px 14px;
 		cursor: pointer;
+		transition:
+			transform 0.12s var(--ease-out),
+			box-shadow 0.12s var(--ease-out);
 	}
 	.commit:hover {
 		transform: translate(-1px, -1px);
 		box-shadow: var(--shadow-stamp);
+	}
+	.commit:active {
+		transform: translate(1px, 1px);
+		box-shadow: var(--shadow-stamp-sm);
 	}
 	.raw {
 		font-size: 11px;
@@ -579,5 +607,11 @@
 	}
 	:global(.warnmark) {
 		color: var(--primary-600);
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.tool,
+		.fill {
+			animation: none !important;
+		}
 	}
 </style>

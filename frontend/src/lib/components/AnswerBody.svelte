@@ -185,8 +185,8 @@
 		</div>
 	{:else if b.kind === 'stats'}
 		<div class="statrow">
-			{#each asArray(b.data) as s}
-				<div class="stat {toneClass(s.tone)}">
+			{#each asArray(b.data) as s, i}
+				<div class="stat {toneClass(s.tone)}" style="animation-delay:{i * 70}ms">
 					<div class="slab">{s.label}</div>
 					<div class="sval">{s.value}</div>
 					{#if s.sub}<div class="ssub">{s.sub}</div>{/if}
@@ -326,6 +326,7 @@
 		border-left-width: 5px;
 		background: var(--card);
 		box-shadow: var(--shadow-stamp-sm);
+		animation: blockIn 0.35s var(--ease-out) both;
 	}
 	.callout.good {
 		border-left-color: var(--inflow);
@@ -388,6 +389,7 @@
 		box-shadow: var(--shadow-stamp-sm);
 		background: var(--card);
 		padding: 10px 13px;
+		animation: blockIn 0.4s var(--ease-out) both;
 	}
 	.stat.good {
 		border-left-color: var(--inflow);
@@ -437,6 +439,7 @@
 	/* ── Progress bar ── */
 	.prog {
 		margin: 10px 0;
+		animation: blockIn 0.35s var(--ease-out) both;
 	}
 	.ptop {
 		display: flex;
@@ -471,6 +474,26 @@
 	.pfill {
 		height: 100%;
 		background: var(--brand);
+		transform-origin: left center;
+		animation: growx 0.6s var(--ease-out) both;
+	}
+	@keyframes growx {
+		from {
+			transform: scaleX(0);
+		}
+		to {
+			transform: scaleX(1);
+		}
+	}
+	@keyframes blockIn {
+		from {
+			opacity: 0;
+			transform: translateY(8px);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
 	}
 	.pfill.good {
 		background: var(--inflow);
@@ -494,6 +517,7 @@
 		box-shadow: var(--shadow-stamp-sm);
 		background: var(--card);
 		padding: 10px 14px;
+		animation: blockIn 0.35s var(--ease-out) both;
 	}
 	.cmplab {
 		font-family: var(--font-sans);
@@ -529,5 +553,14 @@
 	}
 	.cmprow .now.warn {
 		color: var(--primary-700);
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.pfill,
+		.callout,
+		.stat,
+		.prog,
+		.cmp {
+			animation: none !important;
+		}
 	}
 </style>

@@ -6,7 +6,7 @@
 	import { api } from '$lib/api.js';
 	import ToolResult from './ToolResult.svelte';
 	import AnswerBody from './AnswerBody.svelte';
-	import { Sparkles, Send, MessageSquare, Loader, User, Plus, Trash2, History } from '@lucide/svelte';
+	import { Sparkles, Send, MessageSquare, User, Plus, Trash2, History } from '@lucide/svelte';
 
 	// `clientId` scopes "this client" phrasing when embedded on a client page (optional).
 	let { clientId = null } = $props();
@@ -30,6 +30,30 @@
 	let conversations = $state([]);
 	let currentId = $state(null);
 	onMount(loadConversations);
+
+	// A playful "working" status while the (non-streaming) turn runs — cycles phrases so
+	// the wait feels like the engine is actually doing something (it is).
+	const THINKING = [
+		'Reading the book…',
+		'Rolling holdings up by category…',
+		'Simulating 50,000 market futures…',
+		'Reading the tail risk…',
+		'Drafting your answer…'
+	];
+	let thinkingIdx = $state(0);
+	$effect(() => {
+		if (!loading) {
+			thinkingIdx = 0;
+			return;
+		}
+		const id = setInterval(() => (thinkingIdx = (thinkingIdx + 1) % THINKING.length), 1700);
+		return () => clearInterval(id);
+	});
+
+	function autogrow(el) {
+		el.style.height = 'auto';
+		el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+	}
 
 	// @-mention autocomplete: type "@" to filter clients by name, select to bind name→id.
 	// On send, each "@Name" is rewritten inline as "Name (client id N)" so tools get IDs.
@@ -61,6 +85,7 @@
 		const { msg, ids } = rewriteMentions(raw);
 		input = '';
 		mentions = [];
+		if (taEl) taEl.style.height = 'auto'; // reset the auto-grown composer
 		messages.push({ role: 'user', content: raw, sent: msg });
 		loading = true;
 		await scrollDown();
@@ -215,6 +240,7 @@
 
 	function handleInput(e) {
 		const el = e.currentTarget;
+		autogrow(el);
 		const caret = el.selectionStart ?? 0;
 		const before = el.value.slice(0, caret);
 		const m = before.match(/(^|\s)@([^\n@]*)$/); // '@' at start/after space, up to caret
@@ -357,8 +383,13 @@
 
 		{#if loading}
 			<div class="turn asst">
-				<div class="avatar"><Sparkles size={15} strokeWidth={2} /></div>
-				<div class="body"><div class="thinking"><Loader size={14} class="spin" /> reasoning + calling tools…</div></div>
+				<div class="avatar thinkingav"><Sparkles size={15} strokeWidth={2} /></div>
+				<div class="body">
+					<div class="thinking">
+						{#key thinkingIdx}<span class="tphrase">{THINKING[thinkingIdx]}</span>{/key}
+						<span class="tdots"><i></i><i></i><i></i></span>
+					</div>
+				</div>
 			</div>
 		{/if}
 	</div>
@@ -576,6 +607,12 @@
 		flex-wrap: wrap;
 		gap: 10px;
 	}
+	.empty h2 {
+		animation: fadeUp 0.4s var(--ease-out) both;
+	}
+	.empty .h2sub {
+		animation: fadeUp 0.4s var(--ease-out) 0.05s both;
+	}
 	.chip {
 		font-family: var(--font-sans);
 		font-size: 13px;
@@ -589,6 +626,22 @@
 		gap: 8px;
 		cursor: pointer;
 		text-align: left;
+		transition:
+			transform 0.12s var(--ease-out),
+			box-shadow 0.12s var(--ease-out);
+		animation: fadeUp 0.4s var(--ease-out) both;
+	}
+	.chip:nth-child(1) {
+		animation-delay: 0.12s;
+	}
+	.chip:nth-child(2) {
+		animation-delay: 0.19s;
+	}
+	.chip:nth-child(3) {
+		animation-delay: 0.26s;
+	}
+	.chip:nth-child(4) {
+		animation-delay: 0.33s;
 	}
 	.chip:hover {
 		transform: translate(-1px, -1px);
@@ -601,6 +654,17 @@
 	.turn {
 		margin: 16px 0;
 		display: flex;
+		animation: fadeUp 0.36s var(--ease-out) both;
+	}
+	@keyframes fadeUp {
+		from {
+			opacity: 0;
+			transform: translateY(10px);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
 	}
 	.turn.user {
 		justify-content: flex-end;
@@ -663,17 +727,58 @@
 	.thinking {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
-		font-size: 13px;
+		gap: 11px;
+		font-size: 13.5px;
 		color: var(--mut);
 		font-style: italic;
+		padding-top: 5px;
 	}
-	:global(.spin) {
-		animation: spin 1s linear infinite;
+	.tphrase {
+		display: inline-block;
+		animation: fadeUp 0.35s var(--ease-out) both;
 	}
-	@keyframes spin {
-		to {
-			transform: rotate(360deg);
+	.tdots {
+		display: inline-flex;
+		gap: 4px;
+	}
+	.tdots i {
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		background: var(--brand);
+		display: inline-block;
+		animation: bounce 1s ease-in-out infinite;
+	}
+	.tdots i:nth-child(2) {
+		animation-delay: 0.15s;
+	}
+	.tdots i:nth-child(3) {
+		animation-delay: 0.3s;
+	}
+	.thinkingav :global(svg) {
+		animation: breathe 1.7s ease-in-out infinite;
+	}
+	@keyframes bounce {
+		0%,
+		80%,
+		100% {
+			transform: translateY(0);
+			opacity: 0.35;
+		}
+		40% {
+			transform: translateY(-5px);
+			opacity: 1;
+		}
+	}
+	@keyframes breathe {
+		0%,
+		100% {
+			opacity: 0.55;
+			transform: scale(0.9);
+		}
+		50% {
+			opacity: 1;
+			transform: scale(1.08);
 		}
 	}
 	.toast {
@@ -688,6 +793,13 @@
 		border: 1.5px solid var(--primary-900);
 		box-shadow: var(--shadow-stamp);
 		margin-bottom: 8px;
+		animation: fadeUp 0.3s var(--ease-out) both;
+	}
+	/* Conversation rows: gentle tint transition on hover/active. */
+	.convrow {
+		transition:
+			background 0.12s ease,
+			border-color 0.12s ease;
 	}
 	.composer {
 		position: relative;
@@ -698,6 +810,13 @@
 		background: var(--paper);
 		box-shadow: var(--shadow-stamp);
 		padding: 8px 8px 8px 14px;
+		transition:
+			box-shadow 0.18s var(--ease-out),
+			border-color 0.18s var(--ease-out);
+	}
+	.composer:focus-within {
+		border-color: var(--primary-900);
+		box-shadow: var(--shadow-stamp-lg);
 	}
 	.mentionpop {
 		position: absolute;
@@ -711,6 +830,21 @@
 		box-shadow: var(--shadow-stamp);
 		z-index: 30;
 		padding: 5px;
+		transform-origin: bottom left;
+		animation: popIn 0.16s var(--ease-out) both;
+	}
+	.mrow {
+		transition: background 0.1s ease;
+	}
+	@keyframes popIn {
+		from {
+			opacity: 0;
+			transform: translateY(6px) scale(0.98);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
 	}
 	.mhint {
 		font-family: var(--font-sans);
@@ -794,9 +928,18 @@
 		opacity: 0.45;
 		cursor: default;
 	}
+	.sendbtn {
+		transition:
+			transform 0.12s var(--ease-out),
+			box-shadow 0.12s var(--ease-out);
+	}
 	.sendbtn:not(:disabled):hover {
 		transform: translate(-1px, -1px);
 		box-shadow: var(--shadow-stamp);
+	}
+	.sendbtn:not(:disabled):active {
+		transform: translate(1px, 1px);
+		box-shadow: var(--shadow-stamp-sm);
 	}
 	@media (max-width: 860px) {
 		.sidebar {
@@ -806,6 +949,19 @@
 	@media (max-width: 700px) {
 		.copilot {
 			padding: 12px 16px 20px;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.turn,
+		.toast,
+		.mentionpop,
+		.empty h2,
+		.empty .h2sub,
+		.chip,
+		.tphrase,
+		.thinkingav :global(svg),
+		.tdots i {
+			animation: none !important;
 		}
 	}
 </style>
