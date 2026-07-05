@@ -12,11 +12,20 @@ stress_book · rank_book · add_transactions.
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.messages import (
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+    PartDeltaEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+)
 from sqlalchemy.orm import Session
 
 from sim_kernel.categories import CATEGORIES
@@ -188,47 +197,88 @@ def _to_messages(history: list[dict] | None):
     return msgs
 
 
-def _extract_trace(result) -> list[dict]:
-    """Pair each tool call with its result into a visible, ordered trace."""
-    from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+EventCallback = Callable[[dict], Awaitable[None]]
 
-    order: list[str] = []
+
+async def run_copilot(
+    session: Session, model: MarketModel, message: str,
+    history: list[dict] | None = None, client_id: int | None = None,
+    on_event: EventCallback | None = None,
+) -> dict:
+    """Run one Copilot turn: the tool loop plus a captured trace and timing.
+
+    If given, `on_event` is called live, in order, with one of:
+      {"type": "reasoning", "text": str} — narration the model produced before a
+        batch of tool calls (text that turns out to be the final answer, i.e. isn't
+        followed by any tool call, is never emitted here — see below).
+      {"type": "tool_call", "tool_call_id", "tool", "args"} — a tool call has started.
+      {"type": "tool_result", "tool_call_id", "tool", "result"} — that call resolved.
+
+    Returns {answer, trace:[{tool, args, result}], elapsed_ms, backend}. Raises
+    LLMNotConfigured (from the provider) if no API key is set — the endpoint maps that
+    to a clear 503.
+
+    Narration is paired to its own turn's tool calls (not a later turn's) purely by call
+    order: `event_stream_handler` below is invoked once per model-request node (that
+    turn's narration, buffered) immediately followed by once per call-tools node for the
+    *same* turn (that turn's tool calls) — so buffered text is flushed as `reasoning` the
+    moment the next call emits a tool call. If the run ends without that happening, the
+    buffered text was the final answer (already returned as `answer`), so it's dropped
+    unflushed rather than emitted twice.
+    """
+    agent = _agent()
+    deps = CopilotDeps(session=session, model=model, client_id=client_id)
+    start = time.perf_counter()
+
+    trace: list[dict] = []
     calls: dict[str, dict] = {}
-    returns: dict[str, object] = {}
-    for msg in result.new_messages():
-        for part in getattr(msg, "parts", []):
-            if isinstance(part, ToolCallPart):
+    pending_reasoning: list[str] = []
+
+    async def emit(event: dict) -> None:
+        if on_event is not None:
+            await on_event(event)
+
+    async def handler(ctx, events) -> None:
+        nonlocal pending_reasoning
+        async for event in events:
+            if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+                pending_reasoning.append(event.part.content)
+            elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                pending_reasoning.append(event.delta.content_delta)
+            elif isinstance(event, FunctionToolCallEvent):
+                text = "".join(pending_reasoning).strip()
+                pending_reasoning = []
+                if text:
+                    await emit({"type": "reasoning", "text": text})
+                part = event.part
                 try:
                     args = part.args_as_dict()
                 except Exception:
                     args = part.args if isinstance(part.args, dict) else {}
-                calls[part.tool_call_id] = {"tool": part.tool_name, "args": args}
-                order.append(part.tool_call_id)
-            elif isinstance(part, ToolReturnPart):
-                returns[part.tool_call_id] = part.content
+                entry = {"tool": part.tool_name, "args": args, "result": None}
+                calls[part.tool_call_id] = entry
+                trace.append(entry)
+                await emit({
+                    "type": "tool_call", "tool_call_id": part.tool_call_id,
+                    "tool": entry["tool"], "args": args,
+                })
+            elif isinstance(event, FunctionToolResultEvent):
+                entry = calls.get(event.tool_call_id)
+                result = getattr(event.part, "content", None)
+                if entry is not None:
+                    entry["result"] = result
+                await emit({
+                    "type": "tool_result", "tool_call_id": event.tool_call_id,
+                    "tool": entry["tool"] if entry else None, "result": result,
+                })
 
-    return [
-        {"tool": calls[cid]["tool"], "args": calls[cid]["args"], "result": returns.get(cid)}
-        for cid in order if cid in calls
-    ]
-
-
-def run_copilot(
-    session: Session, model: MarketModel, message: str,
-    history: list[dict] | None = None, client_id: int | None = None,
-) -> dict:
-    """Run one Copilot turn: the tool loop plus a captured trace and timing.
-
-    Returns {answer, trace:[{tool, args, result}], elapsed_ms, backend}. Raises
-    LLMNotConfigured (from the provider) if no API key is set — the endpoint maps that
-    to a clear 503."""
-    agent = _agent()
-    deps = CopilotDeps(session=session, model=model, client_id=client_id)
-    start = time.perf_counter()
-    result = agent.run_sync(message, message_history=_to_messages(history), deps=deps)
+    result = await agent.run(
+        message, message_history=_to_messages(history), deps=deps,
+        event_stream_handler=handler,
+    )
     return {
         "answer": result.output,
-        "trace": _extract_trace(result),
+        "trace": trace,
         "elapsed_ms": round((time.perf_counter() - start) * 1000, 1),
         "backend": backend_label(),
     }

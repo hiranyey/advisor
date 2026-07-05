@@ -135,41 +135,43 @@
 						{#if insights.over_exposed}
 							<ShieldAlert size={16} strokeWidth={2} />
 							<span
-								>Over-exposed — worst-case 1-yr loss of <b>{pct(insights.max_drawdown)}</b>
-								exceeds the {pct(insights.tolerable_dd)} a {client.risk_profile} profile tolerates
-								(by {pct(insights.suitability_mismatch)}).</span
+								>This portfolio is riskier than it should be. In a bad year, it could lose
+								<b>{pct(insights.max_drawdown)}</b> of its value — more than the
+								{pct(insights.tolerable_dd)} that's considered safe for a {client.risk_profile} investor
+								(by {pct(insights.suitability_mismatch)} too much).</span
 							>
 						{:else}
 							<ShieldAlert size={16} strokeWidth={2} />
 							<span
-								>Within tolerance — worst-case 1-yr loss of <b>{pct(insights.max_drawdown)}</b>
-								stays under the {pct(insights.tolerable_dd)} a {client.risk_profile} profile tolerates.</span
+								>This portfolio's risk level looks fine. In a bad year, it could lose
+								<b>{pct(insights.max_drawdown)}</b> of its value, which is within the
+								{pct(insights.tolerable_dd)} considered safe for a {client.risk_profile} investor.</span
 							>
 						{/if}
 					</div>
 
 					<div class="stats">
 						<div class="stat">
-							<span class="slabel"><Gauge size={13} strokeWidth={2} /> Worst-case drawdown</span>
+							<span class="slabel"><Gauge size={13} strokeWidth={2} /> Biggest possible drop</span>
 							<span class="sval {probClass(1 - insights.max_drawdown / (insights.tolerable_dd || 1))}"
 								>−{pct(insights.max_drawdown)}</span
 							>
-							<span class="ssub">tolerable −{pct(insights.tolerable_dd)}</span>
+							<span class="ssub">safe limit is −{pct(insights.tolerable_dd)}</span>
 						</div>
 						<div class="stat">
-							<span class="slabel">VaR 95%</span>
+							<span class="slabel">Loss in a bad year</span>
 							<span class="sval">−{pct(insights.var_95)}</span>
-							<span class="ssub">1-in-20 yearly loss</span>
+							<span class="ssub">happens about 1 year in 20</span>
 						</div>
 						<div class="stat">
-							<span class="slabel">CVaR 95%</span>
+							<span class="slabel">Loss in a very bad year</span>
 							<span class="sval">−{pct(insights.cvar_95)}</span>
-							<span class="ssub">avg of the worst 5%</span>
+							<span class="ssub">average of the worst outcomes</span>
 						</div>
 						<div class="stat">
 							<span class="slabel">Risk score</span>
 							<span class="sval">{insights.risk_score}<span class="ssuffix">/100</span></span>
-							<span class="ssub">downside intensity</span>
+							<span class="ssub">higher = riskier</span>
 						</div>
 					</div>
 				{/if}

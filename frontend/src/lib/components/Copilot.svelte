@@ -5,7 +5,7 @@
 	import { tick, onMount, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { api } from '$lib/api.js';
+	import { api, copilotJobEventsUrl } from '$lib/api.js';
 	import ToolResult from './ToolResult.svelte';
 	import AnswerBody from './AnswerBody.svelte';
 	import { Sparkles, Send, MessageSquare, User, Plus, Trash2, History } from '@lucide/svelte';
@@ -61,7 +61,7 @@
 	const THINKING = [
 		'Reading the book…',
 		'Rolling holdings up by category…',
-		'Simulating 50,000 market futures…',
+		'Simulating 500,000 market futures…',
 		'Reading the tail risk…',
 		'Drafting your answer…'
 	];
@@ -103,6 +103,75 @@
 		threadEl?.scrollTo({ top: threadEl.scrollHeight, behavior: 'smooth' });
 	}
 
+	// Streams one job's events onto its (already-pushed, reactive) assistant message:
+	// tool_call → a pending trace card; tool_result → fills it in; reasoning → a line
+	// placed just before the trace card(s) it introduced; final/error → settles the
+	// turn. Resolves once the stream ends, however it ends — never rejects, since
+	// every path (server error event or a dropped connection) already writes its
+	// outcome onto `asst`.
+	function streamJob(jobId, asst) {
+		return new Promise((resolve) => {
+			const es = new EventSource(copilotJobEventsUrl(jobId));
+			let settled = false;
+			const settle = () => {
+				if (settled) return;
+				settled = true;
+				es.close();
+				resolve();
+			};
+			es.onmessage = async (ev) => {
+				let data;
+				try {
+					data = JSON.parse(ev.data);
+				} catch {
+					return;
+				}
+				if (data.type === 'tool_call') {
+					asst.trace.push({
+						tool_call_id: data.tool_call_id,
+						tool: data.tool,
+						args: data.args,
+						result: null,
+						pending: true
+					});
+				} else if (data.type === 'tool_result') {
+					const entry = asst.trace.find((t) => t.tool_call_id === data.tool_call_id);
+					if (entry) {
+						entry.result = data.result;
+						entry.pending = false;
+					}
+				} else if (data.type === 'reasoning') {
+					asst.reasoning.push({ text: data.text, beforeIndex: asst.trace.length });
+				} else if (data.type === 'final') {
+					asst.content = data.answer;
+					asst.elapsed_ms = data.elapsed_ms;
+					asst.backend = data.backend;
+					asst.streaming = false;
+					currentId = data.conversation_id;
+					syncUrl(currentId);
+					loadConversations(); // refresh titles + ordering
+					settle();
+				} else if (data.type === 'error') {
+					asst.error = true;
+					asst.content = data.detail;
+					asst.streaming = false;
+					settle();
+				}
+				await scrollDown();
+			};
+			es.onerror = () => {
+				// The connection dropped (not a server-sent "error" event) — the job may
+				// still be running server-side, but the live view can't continue.
+				if (asst.streaming) {
+					asst.streaming = false;
+					asst.error = true;
+					asst.content = 'Lost connection to the Copilot job.';
+				}
+				settle();
+			};
+		});
+	}
+
 	async function send(text) {
 		const raw = (text ?? input).trim();
 		if (!raw || loading) return;
@@ -112,30 +181,26 @@
 		mentions = [];
 		if (taEl) taEl.style.height = 'auto'; // reset the auto-grown composer
 		messages.push({ role: 'user', content: raw, sent: msg });
+		const priorHistory = history();
+		messages.push({ role: 'assistant', trace: [], reasoning: [], streaming: true });
+		const asst = messages[messages.length - 1]; // the reactive item, not the plain literal above
 		loading = true;
 		await scrollDown();
 		// A single mentioned client also scopes "this client" phrasing; else keep the prop.
 		const client_id = ids.length === 1 ? ids[0] : clientId;
 		try {
-			const res = await api.copilot({
+			const { job_id } = await api.startCopilotJob({
 				message: msg,
 				display_message: raw,
-				history: history(),
+				history: priorHistory,
 				client_id,
 				conversation_id: currentId
 			});
-			currentId = res.conversation_id;
-			syncUrl(currentId);
-			messages.push({
-				role: 'assistant',
-				content: res.answer,
-				trace: res.trace,
-				elapsed_ms: res.elapsed_ms,
-				backend: res.backend
-			});
-			loadConversations(); // refresh titles + ordering
+			await streamJob(job_id, asst);
 		} catch (e) {
-			messages.push({ role: 'assistant', error: true, content: e.message });
+			asst.error = true;
+			asst.content = e.message;
+			asst.streaming = false;
 		} finally {
 			loading = false;
 			await scrollDown();
@@ -391,12 +456,17 @@
 				<div class="turn user"><div class="bubble">{m.content}</div></div>
 			{:else}
 				<div class="turn asst">
-					<div class="avatar"><Sparkles size={15} strokeWidth={2} /></div>
+					<div class="avatar" class:thinkingav={m.streaming && !m.trace?.length}>
+						<Sparkles size={15} strokeWidth={2} />
+					</div>
 					<div class="body">
 						{#if m.trace?.length}
 							<div class="trace">
-								{#each m.trace as entry}
-									<ToolResult {entry} oncommit={handleCommit} />
+								{#each m.trace as entry, i}
+									{#each (m.reasoning ?? []).filter((r) => r.beforeIndex === i) as r}
+										<p class="reasoning">{r.text}</p>
+									{/each}
+									<ToolResult {entry} index={i} pending={entry.pending} oncommit={handleCommit} />
 								{/each}
 							</div>
 						{/if}
@@ -404,6 +474,15 @@
 							<div class="answer err">{m.content}</div>
 						{:else if m.content}
 							<div class="answer"><AnswerBody text={m.content} /></div>
+						{:else if m.streaming}
+							<div class="thinking">
+								{#if m.trace?.length}
+									<span class="tphrase">Reading the tool results…</span>
+								{:else}
+									{#key thinkingIdx}<span class="tphrase">{THINKING[thinkingIdx]}</span>{/key}
+								{/if}
+								<span class="tdots"><i></i><i></i><i></i></span>
+							</div>
 						{/if}
 						{#if m.elapsed_ms != null}
 							<div class="meta">{m.backend} · {m.elapsed_ms} ms</div>
@@ -412,18 +491,6 @@
 				</div>
 			{/if}
 		{/each}
-
-		{#if loading}
-			<div class="turn asst">
-				<div class="avatar thinkingav"><Sparkles size={15} strokeWidth={2} /></div>
-				<div class="body">
-					<div class="thinking">
-						{#key thinkingIdx}<span class="tphrase">{THINKING[thinkingIdx]}</span>{/key}
-						<span class="tdots"><i></i><i></i><i></i></span>
-					</div>
-				</div>
-			</div>
-		{/if}
 	</div>
 
 	{#if toast}<div class="toast">{toast}</div>{/if}
@@ -757,6 +824,14 @@
 	.trace {
 		margin-bottom: 6px;
 	}
+	.reasoning {
+		font-family: var(--font-serif);
+		font-style: italic;
+		font-size: 13.5px;
+		color: var(--mut);
+		margin: 8px 2px 6px;
+		animation: fadeUp 0.3s var(--ease-out) both;
+	}
 	.answer {
 		font-size: 14.5px;
 		color: var(--ink);
@@ -1016,7 +1091,8 @@
 		.chip,
 		.tphrase,
 		.thinkingav :global(svg),
-		.tdots i {
+		.tdots i,
+		.reasoning {
 			animation: none !important;
 		}
 	}

@@ -4,6 +4,7 @@ The daily AMFI NAV refresh runs via APScheduler (see app.scheduler). A manual
 trigger endpoint is exposed for testing and on-demand refreshes.
 """
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,6 +19,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 
 from app import scheduler
 from app.api import book, clients, conversations, copilot
+from app.api.copilot import JOBS
 from app.db import Base, engine
 from app.models import CopilotConversation, CopilotMessage
 from app.tasks.refresh_navs import refresh_navs
@@ -35,6 +37,15 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         scheduler.shutdown()
+        # Don't abandon in-flight Copilot jobs on shutdown/redeploy — give them a
+        # chance to finish, then cancel whatever's left.
+        tasks = [job.task for job in JOBS.values() if job.task and not job.task.done()]
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=10)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
 
 app = FastAPI(

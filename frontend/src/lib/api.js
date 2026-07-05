@@ -41,6 +41,12 @@ async function del(path) {
 	return res.json();
 }
 
+// Absolute SSE URL for a Copilot job — EventSource needs a full path, not a relative
+// one resolved against a different base.
+export function copilotJobEventsUrl(jobId) {
+	return new URL(`${API_BASE}/copilot/jobs/${jobId}/events`, window.location.origin).toString();
+}
+
 export const api = {
 	listClients: (params) => get('/clients', params),
 	getClient: (id) => get(`/clients/${id}`),
@@ -50,8 +56,9 @@ export const api = {
 	getInsights: (id) => get(`/clients/${id}/insights`),
 	bookSummary: () => get('/book/summary'),
 	bookRadar: () => get('/book/radar'),
-	// Copilot: one message in, narrated answer + visible tool-call trace out.
-	copilot: (body) => post('/copilot', body),
+	// Copilot: one message in, a job back immediately — the caller opens
+	// copilotJobEventsUrl(job_id) to stream tool calls/reasoning/the final answer.
+	startCopilotJob: (body) => post('/copilot/jobs', body),
 	// Commit half of the NL data-entry flow (add_transactions only parses).
 	commitTransactions: (id, rows) => post(`/clients/${id}/transactions`, { rows }),
 	// DB-backed conversation history.

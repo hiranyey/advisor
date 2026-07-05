@@ -15,13 +15,15 @@
 		TrendingDown,
 		ArrowRight,
 		Check,
-		AlertTriangle
+		AlertTriangle,
+		LoaderCircle
 	} from '@lucide/svelte';
 
-	let { entry, oncommit } = $props();
+	let { entry, oncommit, index = null, pending = false } = $props();
 
 	const result = $derived(entry?.result ?? {});
-	const isError = $derived(result && typeof result === 'object' && 'error' in result);
+	const isError = $derived(!pending && result && typeof result === 'object' && 'error' in result);
+	const num = $derived(index != null ? String(index + 1).padStart(2, '0') : null);
 
 	const META = {
 		query_book: { label: 'query_book', icon: Search },
@@ -55,18 +57,23 @@
 	);
 </script>
 
-<div class="tool">
+<div class="tool" class:pending>
 	<div class="toolhead">
+		{#if num}<span class="tnum">№{num}</span>{/if}
 		<span class="tchip"><ToolIcon size={13} strokeWidth={2} />{toolLabel}</span>
 		{#if entry.args && Object.keys(entry.args).length}
 			<span class="targs">{JSON.stringify(entry.args)}</span>
 		{/if}
-		{#if result?.elapsed_ms != null}
+		{#if pending}
+			<span class="ttime pend"><LoaderCircle size={12} strokeWidth={2} class="spin" />running</span>
+		{:else if result?.elapsed_ms != null}
 			<span class="ttime">{result.backend?.includes('GPU') ? 'GPU' : 'CPU'} · {result.elapsed_ms} ms</span>
 		{/if}
 	</div>
 
-	{#if isError}
+	{#if pending}
+		<p class="cap">Consulting {toolLabel}…</p>
+	{:else if isError}
 		<p class="err"><AlertTriangle size={14} /> {result.error}</p>
 
 	<!-- ── rank_book / query_book: a client table ────────────────────────────── -->
@@ -278,6 +285,14 @@
 		flex-wrap: wrap;
 		margin-bottom: 10px;
 	}
+	.tnum {
+		font-family: var(--font-serif);
+		font-style: italic;
+		font-weight: 700;
+		font-size: 13px;
+		color: var(--mut);
+		flex: none;
+	}
 	.tchip {
 		display: inline-flex;
 		align-items: center;
@@ -310,6 +325,23 @@
 		letter-spacing: 0.08em;
 		color: var(--inflow);
 		text-transform: uppercase;
+	}
+	.ttime.pend {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		color: var(--mut);
+	}
+	.ttime.pend :global(.spin) {
+		animation: spin 0.9s linear infinite;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+	.tool.pending {
+		opacity: 0.7;
 	}
 	.cap {
 		font-size: 12px;
@@ -617,7 +649,8 @@
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.tool,
-		.fill {
+		.fill,
+		.ttime.pend :global(.spin) {
 			animation: none !important;
 		}
 	}
