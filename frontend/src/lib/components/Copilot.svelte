@@ -2,7 +2,7 @@
 	// The Copilot Workspace — chat box → POST /copilot, rendering the narrated answer,
 	// the visible tool-call trace (as result cards), and the GPU-vs-CPU timing. Both
 	// what-if and stress come back on the same surface: a message in, rich cards back.
-	import { tick, onMount } from 'svelte';
+	import { tick, onMount, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { api } from '$lib/api.js';
@@ -36,12 +36,15 @@
 	// The open conversation lives in `?c=<id>` so the browser's back/forward buttons
 	// step through conversations instead of dumping the user back on the empty state
 	// after they navigate away (e.g. to a client page) and return. `syncUrl` is the only
-	// writer of `c`; this effect is the only reader — it fires on our own writes too, but
-	// currentId is always updated first, so the id already matches and it's a no-op.
+	// writer of `c`; this effect is the only reader, and must react ONLY to the URL
+	// changing. `currentId` is read with `untrack` so this effect doesn't also fire when
+	// openChat sets currentId (which happens before its goto() resolves) — otherwise the
+	// stale `page.url` read during that window disagrees with the new currentId and the
+	// effect calls openChat on the *previous* id, which flips currentId back and loops.
 	$effect(() => {
 		const raw = page.url.searchParams.get('c');
 		const cid = raw ? Number(raw) : null;
-		if (cid === currentId) return;
+		if (cid === untrack(() => currentId)) return;
 		if (cid) openChat(cid, { push: false });
 		else resetChat();
 	});
@@ -498,6 +501,30 @@
 		display: flex;
 		flex-direction: column;
 		gap: 3px;
+	}
+	/* Ledger-style scrollbar: square, ink-on-cream, matching the stamp aesthetic. */
+	.convlist,
+	.thread {
+		scrollbar-width: thin;
+		scrollbar-color: var(--primary-600) transparent;
+	}
+	.convlist::-webkit-scrollbar,
+	.thread::-webkit-scrollbar {
+		width: 9px;
+	}
+	.convlist::-webkit-scrollbar-track,
+	.thread::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	.convlist::-webkit-scrollbar-thumb,
+	.thread::-webkit-scrollbar-thumb {
+		background-color: var(--primary-600);
+		border: 2px solid var(--primary-100);
+		background-clip: padding-box;
+	}
+	.convlist::-webkit-scrollbar-thumb:hover,
+	.thread::-webkit-scrollbar-thumb:hover {
+		background-color: var(--primary-800);
 	}
 	.convempty {
 		font-size: 12px;
