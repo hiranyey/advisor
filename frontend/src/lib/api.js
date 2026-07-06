@@ -63,6 +63,7 @@ export const api = {
 	// Copilot: one message in, a job back immediately — the caller opens
 	// copilotJobEventsUrl(job_id) to stream tool calls/reasoning/the final answer.
 	startCopilotJob: (body) => post('/copilot/jobs', body),
+	stopCopilotJob: (jobId) => del(`/copilot/jobs/${jobId}`),
 	// Commit half of the NL data-entry flow (add_transactions only parses).
 	commitTransactions: (id, rows) => post(`/clients/${id}/transactions`, { rows }),
 	// DB-backed conversation history.

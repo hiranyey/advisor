@@ -8,7 +8,21 @@
 	import { api, copilotJobEventsUrl } from '$lib/api.js';
 	import ToolResult from './ToolResult.svelte';
 	import AnswerBody from './AnswerBody.svelte';
-	import { Sparkles, Send, MessageSquare, User, Plus, Trash2, History } from '@lucide/svelte';
+	import {
+		Sparkles,
+		Send,
+		MessageSquare,
+		User,
+		Plus,
+		Trash2,
+		History,
+		Square,
+		Copy,
+		Check,
+		RotateCcw,
+		ChevronDown,
+		ChevronRight
+	} from '@lucide/svelte';
 
 	// `clientId` scopes "this client" phrasing when embedded on a client page (optional).
 	let { clientId = null } = $props();
@@ -30,6 +44,36 @@
 
 	function chipLabel(c) {
 		return c.mention ? `${c.mention.prefix}…${c.mention.suffix}` : c.prompt;
+	}
+
+	// Follow-up suggestions shown under a settled answer, picked off the last tool
+	// the turn used — plain prompts (no @mention) since the conversation history
+	// already carries "who we're talking about" for the model to resolve "they"/"them".
+	const FOLLOWUPS = {
+		get_client_brief: [
+			'What if they increased their SIP by ₹5,000/month?',
+			'How would a 20% market drop affect them?'
+		],
+		run_whatif: [
+			'Now run a market-crash stress test for them.',
+			'What does a 10-year projection look like instead?'
+		],
+		project_portfolio: [
+			'What if they increased the SIP instead?',
+			'How does a market shock change this projection?'
+		],
+		stress_book: ['Who should I call first about this?', 'Which clients are most overexposed here?'],
+		rank_book: ['Give me the brief on the top client.', 'What stood out in the book this morning?'],
+		rank_goal_shortfalls: ['Who should I call first, and why?', 'What if the top client raised their SIP?'],
+		query_book: ['Who should I call first, and why?', 'Is my book getting riskier over the last month?']
+	};
+	const GENERIC_FOLLOWUPS = [
+		'Who should I call first, and why?',
+		'What stood out in the book this morning?'
+	];
+	function followupsFor(m) {
+		const lastTool = m.trace?.[m.trace.length - 1]?.tool;
+		return FOLLOWUPS[lastTool] ?? GENERIC_FOLLOWUPS;
 	}
 
 	// Mention-chips don't send immediately — they seed the composer with "<prefix>@<suffix>"
@@ -62,6 +106,9 @@
 	let toast = $state(null);
 	let threadEl;
 	let taEl;
+	let currentJobId = $state(null); // in-flight job id, for the stop button
+	let stickToBottom = $state(true); // false once the advisor scrolls up mid-stream
+	let copiedId = $state(null); // the message object whose "Copy" just fired (for the checkmark)
 
 	// DB-backed conversation history (the sidebar). currentId is the open chat, or null
 	// for an unsaved new chat — set once the first turn is persisted.
@@ -138,9 +185,18 @@
 			.map((m) => ({ role: m.role, content: m.sent ?? m.content ?? '' }));
 	}
 
-	async function scrollDown() {
+	// Autoscroll only while the advisor is already near the bottom — scrolling up mid-
+	// stream to reread a tool card shouldn't get yanked back down by the next event.
+	async function scrollDown(force = false) {
 		await tick();
+		if (!force && !stickToBottom) return;
 		threadEl?.scrollTo({ top: threadEl.scrollHeight, behavior: 'smooth' });
+	}
+
+	function handleThreadScroll() {
+		if (!threadEl) return;
+		const gap = threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight;
+		stickToBottom = gap < 80;
 	}
 
 	// Streams one job's events onto its (already-pushed, reactive) assistant message:
@@ -187,6 +243,7 @@
 					asst.elapsed_ms = data.elapsed_ms;
 					asst.backend = data.backend;
 					asst.streaming = false;
+					asst.traceOpen = false; // tuck the trace away now the narrated answer is in
 					currentId = data.conversation_id;
 					syncUrl(currentId);
 					loadConversations(); // refresh titles + ordering
@@ -194,6 +251,10 @@
 				} else if (data.type === 'error') {
 					asst.error = true;
 					asst.content = data.detail;
+					asst.streaming = false;
+					settle();
+				} else if (data.type === 'cancelled') {
+					asst.stopped = true;
 					asst.streaming = false;
 					settle();
 				}
@@ -212,6 +273,37 @@
 		});
 	}
 
+	// Shared tail of send() and retry(): `messages` already ends with the user turn to
+	// answer (history() reads it back out), so both just need to push the assistant
+	// placeholder and drive the job. `client_id` scopes "this client" phrasing.
+	async function runTurn(raw, sent, client_id) {
+		const priorHistory = history();
+		messages.push({ role: 'assistant', trace: [], reasoning: [], streaming: true, traceOpen: true });
+		const asst = messages[messages.length - 1]; // the reactive item, not the plain literal above
+		loading = true;
+		stickToBottom = true;
+		await scrollDown(true);
+		try {
+			const { job_id } = await api.startCopilotJob({
+				message: sent,
+				display_message: raw,
+				history: priorHistory,
+				client_id,
+				conversation_id: currentId
+			});
+			currentJobId = job_id;
+			await streamJob(job_id, asst);
+		} catch (e) {
+			asst.error = true;
+			asst.content = e.message;
+			asst.streaming = false;
+		} finally {
+			loading = false;
+			currentJobId = null;
+			await scrollDown();
+		}
+	}
+
 	async function send(text) {
 		const raw = (text ?? input).trim();
 		if (!raw || loading) return;
@@ -220,30 +312,39 @@
 		input = '';
 		mentions = [];
 		if (taEl) taEl.style.height = 'auto'; // reset the auto-grown composer
-		messages.push({ role: 'user', content: raw, sent: msg });
-		const priorHistory = history();
-		messages.push({ role: 'assistant', trace: [], reasoning: [], streaming: true });
-		const asst = messages[messages.length - 1]; // the reactive item, not the plain literal above
-		loading = true;
-		await scrollDown();
+		messages.push({ role: 'user', content: raw, sent: msg, mentionIds: ids });
 		// A single mentioned client also scopes "this client" phrasing; else keep the prop.
 		const client_id = ids.length === 1 ? ids[0] : clientId;
+		await runTurn(raw, msg, client_id);
+	}
+
+	// Re-run the last turn: drop its (settled or errored) assistant reply and ask again
+	// with the same user message. Only offered on the last turn — retrying a middle one
+	// would leave later turns answering a conversation that no longer happened.
+	async function retry(asst) {
+		if (loading) return;
+		const idx = messages.indexOf(asst);
+		const userMsg = messages[idx - 1];
+		if (idx < 1 || userMsg?.role !== 'user') return;
+		messages.splice(idx, 1);
+		const ids = userMsg.mentionIds ?? [];
+		const client_id = ids.length === 1 ? ids[0] : clientId;
+		await runTurn(userMsg.content, userMsg.sent, client_id);
+	}
+
+	function stopGeneration() {
+		if (currentJobId) api.stopCopilotJob(currentJobId).catch(() => {});
+	}
+
+	async function copyAnswer(m) {
 		try {
-			const { job_id } = await api.startCopilotJob({
-				message: msg,
-				display_message: raw,
-				history: priorHistory,
-				client_id,
-				conversation_id: currentId
-			});
-			await streamJob(job_id, asst);
-		} catch (e) {
-			asst.error = true;
-			asst.content = e.message;
-			asst.streaming = false;
-		} finally {
-			loading = false;
-			await scrollDown();
+			await navigator.clipboard.writeText(m.content);
+			copiedId = m;
+			setTimeout(() => {
+				if (copiedId === m) copiedId = null;
+			}, 1500);
+		} catch {
+			/* clipboard permission denied — no fallback worth the complexity here */
 		}
 	}
 
@@ -279,7 +380,8 @@
 			input = '';
 			closeMentions();
 			syncUrl(id, { push });
-			await scrollDown();
+			stickToBottom = true;
+			await scrollDown(true);
 		} catch (e) {
 			toast = `Couldn't open conversation: ${e.message}`;
 			setTimeout(() => (toast = null), 4000);
@@ -463,7 +565,7 @@
 		<div class="cophead">
 			<div class="titlewrap">
 				<span class="titleicon"><Sparkles size={36} strokeWidth={1.5} /></span>
-				<h1 class="title">AI Advisor</h1>
+				<h1 class="title">Counsel</h1>
 			</div>
 			<button class="newchat" onclick={newChat}>
 				<Plus size={15} strokeWidth={2} /> New chat
@@ -471,7 +573,7 @@
 		</div>
 		<div class="titlerule"></div>
 
-	<div class="thread" bind:this={threadEl}>
+	<div class="thread" bind:this={threadEl} onscroll={handleThreadScroll}>
 		{#if messages.length === 0}
 			<div class="empty">
 				<h2>Ask the book anything.</h2>
@@ -501,18 +603,33 @@
 					<div class="body">
 						{#if m.trace?.length}
 							<div class="trace">
-								{#each m.trace as entry, i}
-									{#each (m.reasoning ?? []).filter((r) => r.beforeIndex === i) as r}
-										<p class="reasoning">{r.text}</p>
+								{#if !m.streaming}
+									{@const tools = [...new Set(m.trace.map((t) => t.tool))]}
+									<button class="tracetoggle" onclick={() => (m.traceOpen = !m.traceOpen)}>
+										{#if m.traceOpen}<ChevronDown size={13} strokeWidth={2} />{:else}<ChevronRight
+												size={13}
+												strokeWidth={2}
+											/>{/if}
+										{m.traceOpen ? 'Hide' : 'Show'}
+										{m.trace.length} tool call{m.trace.length === 1 ? '' : 's'} · {tools.join(', ')}
+									</button>
+								{/if}
+								{#if m.streaming || m.traceOpen}
+									{#each m.trace as entry, i}
+										{#each (m.reasoning ?? []).filter((r) => r.beforeIndex === i) as r}
+											<p class="reasoning">{r.text}</p>
+										{/each}
+										<ToolResult {entry} index={i} pending={entry.pending} oncommit={handleCommit} />
 									{/each}
-									<ToolResult {entry} index={i} pending={entry.pending} oncommit={handleCommit} />
-								{/each}
+								{/if}
 							</div>
 						{/if}
 						{#if m.error}
 							<div class="answer err">{m.content}</div>
 						{:else if m.content}
 							<div class="answer"><AnswerBody text={m.content} clients={allClients ?? []} /></div>
+						{:else if m.stopped}
+							<div class="answer stopped">Stopped.</div>
 						{:else if m.streaming}
 							<div class="thinking">
 								{#if m.trace?.length}
@@ -523,8 +640,34 @@
 								<span class="tdots"><i></i><i></i><i></i></span>
 							</div>
 						{/if}
+						{#if !m.streaming && (m.content || m.error || m.stopped)}
+							<div class="msgactions">
+								{#if m.content}
+									<button class="actbtn" onclick={() => copyAnswer(m)}>
+										{#if copiedId === m}<Check size={12} strokeWidth={2} /> Copied{:else}<Copy
+												size={12}
+												strokeWidth={2}
+											/> Copy{/if}
+									</button>
+								{/if}
+								{#if m === messages[messages.length - 1]}
+									<button class="actbtn" onclick={() => retry(m)} disabled={loading}>
+										<RotateCcw size={12} strokeWidth={2} /> Retry
+									</button>
+								{/if}
+							</div>
+						{/if}
 						{#if m.elapsed_ms != null}
 							<div class="meta">{m.backend} · {m.elapsed_ms} ms</div>
+						{/if}
+						{#if m.content && !m.streaming && !m.error && m === messages[messages.length - 1]}
+							<div class="followups">
+								{#each followupsFor(m) as f}
+									<button class="fchip" onclick={() => send(f)} disabled={loading}>
+										<MessageSquare size={12} strokeWidth={1.8} />{f}
+									</button>
+								{/each}
+							</div>
 						{/if}
 					</div>
 				</div>
@@ -563,9 +706,15 @@
 			placeholder="Ask about the book, a what-if, a market shock… type @ to mention a client"
 			rows="1"
 		></textarea>
-		<button class="sendbtn" onclick={() => send()} disabled={loading || !input.trim()}>
-			<Send size={16} strokeWidth={2} />
-		</button>
+		{#if loading}
+			<button class="sendbtn stopbtn" onclick={stopGeneration} aria-label="Stop generating">
+				<Square size={13} strokeWidth={2} fill="currentColor" />
+			</button>
+		{:else}
+			<button class="sendbtn" onclick={() => send()} disabled={!input.trim()}>
+				<Send size={16} strokeWidth={2} />
+			</button>
+		{/if}
 	</div>
 	</div>
 </div>
@@ -874,6 +1023,105 @@
 		background: var(--outflow-soft);
 		border-color: var(--outflow);
 	}
+	.answer.stopped {
+		color: var(--mut);
+		font-style: italic;
+		font-size: 13.5px;
+		background: var(--card-2);
+		border-color: var(--primary-300);
+		box-shadow: none;
+	}
+	.tracetoggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-family: var(--font-sans);
+		font-size: 11.5px;
+		font-weight: 700;
+		letter-spacing: 0.02em;
+		color: var(--ink-2);
+		background: var(--card-2);
+		border: 1.5px solid var(--primary-300);
+		padding: 6px 11px;
+		margin-bottom: 8px;
+		cursor: pointer;
+		transition:
+			border-color 0.12s ease,
+			background 0.12s ease,
+			transform 0.12s var(--ease-out);
+	}
+	.tracetoggle :global(svg) {
+		color: var(--brand);
+		flex: none;
+	}
+	.tracetoggle:hover {
+		border-color: var(--primary-700);
+		background: var(--card);
+		transform: translate(-1px, -1px);
+		color: var(--ink-2);
+	}
+	.msgactions {
+		display: flex;
+		gap: 6px;
+		margin-top: 8px;
+	}
+	.actbtn {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-family: var(--font-sans);
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--mut);
+		background: transparent;
+		border: 1px solid var(--primary-300);
+		padding: 4px 9px;
+		cursor: pointer;
+		transition:
+			color 0.12s ease,
+			border-color 0.12s ease;
+	}
+	.actbtn:hover:not(:disabled) {
+		color: var(--brand-strong);
+		border-color: var(--primary-600);
+	}
+	.actbtn:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.followups {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin-top: 12px;
+	}
+	.fchip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-family: var(--font-sans);
+		font-size: 12px;
+		color: var(--ink-2);
+		background: var(--card-2);
+		border: 1px solid var(--primary-300);
+		padding: 6px 11px;
+		cursor: pointer;
+		transition:
+			transform 0.12s var(--ease-out),
+			border-color 0.12s ease;
+	}
+	.fchip:hover:not(:disabled) {
+		border-color: var(--primary-700);
+		transform: translate(-1px, -1px);
+	}
+	.fchip:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.fchip :global(svg) {
+		color: var(--brand);
+		flex: none;
+	}
 	.meta {
 		font-size: 10.5px;
 		font-weight: 700;
@@ -1085,6 +1333,10 @@
 	.sendbtn:disabled {
 		opacity: 0.45;
 		cursor: default;
+	}
+	.stopbtn {
+		background: var(--outflow);
+		border-color: var(--primary-900);
 	}
 	.sendbtn {
 		transition:

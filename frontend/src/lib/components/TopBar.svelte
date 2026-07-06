@@ -5,7 +5,7 @@
 	// Three tabs for now (shareable client docs deferred). Active state matches by
 	// path prefix so /clients/[id] keeps the Clients tab lit.
 	const tabs = [
-		{ href: '/advisor', label: 'AI Advisor', icon: Sparkles, match: (p) => p.startsWith('/advisor') },
+		{ href: '/advisor', label: 'Counsel', icon: Sparkles, match: (p) => p.startsWith('/advisor') },
 		{ href: '/', label: 'Dashboard', icon: Radar, match: (p) => p === '/' || p.startsWith('/radar') },
 		{ href: '/clients', label: 'Clients', icon: Users, match: (p) => p.startsWith('/clients') }
 	];

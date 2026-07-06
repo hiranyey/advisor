@@ -43,7 +43,7 @@ JOB_TTL_SECONDS = 15 * 60
 @dataclass
 class JobState:
     events: list[dict] = field(default_factory=list)
-    status: str = "running"  # running | done | error
+    status: str = "running"  # running | done | error | cancelled
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     task: asyncio.Task | None = None
     created_at: float = field(default_factory=time.monotonic)
@@ -65,8 +65,8 @@ def _sweep_expired() -> None:
 async def _push(job: JobState, event: dict) -> None:
     async with job.condition:
         job.events.append(event)
-        if event["type"] in ("final", "error"):
-            job.status = "done" if event["type"] == "final" else "error"
+        if event["type"] in ("final", "error", "cancelled"):
+            job.status = "done" if event["type"] == "final" else event["type"]
         job.condition.notify_all()
 
 
@@ -98,6 +98,11 @@ async def _run_job(
             "elapsed_ms": out["elapsed_ms"], "backend": out["backend"],
             "conversation_id": conv_id,
         })
+    except asyncio.CancelledError:
+        # The advisor hit "stop" — tell the stream so it can settle the turn instead of
+        # hanging on a dropped connection. Not re-raised: this task is already unwinding
+        # and there's nothing above it to observe the cancellation.
+        await _push(job, {"type": "cancelled"})
     except Exception as exc:
         log.exception("copilot job failed")
         await _push(job, {"type": "error", "detail": str(exc)})
@@ -137,6 +142,16 @@ async def create_copilot_job(
         conversation_id=req.conversation_id,
     ))
     return {"job_id": job_id}
+
+
+@router.delete("/copilot/jobs/{job_id}")
+async def cancel_copilot_job(job_id: str) -> dict:
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found (or expired)")
+    if job.task and not job.task.done():
+        job.task.cancel()
+    return {"status": "cancelling"}
 
 
 def _format_sse(event: dict) -> str:
