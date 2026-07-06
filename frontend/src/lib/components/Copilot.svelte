@@ -150,6 +150,12 @@
 		'Rolling holdings up by category…',
 		'Simulating 500,000 market futures…',
 		'Reading the tail risk…',
+		'Cross-checking suitability bands…',
+		'Ranking the book by mismatch…',
+		'Pricing the what-if…',
+		'Stress-testing the portfolio…',
+		'Checking goal funding gaps…',
+		'Consulting the ledger…',
 		'Drafting your answer…'
 	];
 	let thinkingIdx = $state(0);
