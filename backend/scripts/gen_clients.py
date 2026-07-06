@@ -116,39 +116,73 @@ EXOTIC_LAST = [
 ]
 
 # ── Investing styles: target category weights (normalized at pick time) ─────────
+# Gold/silver are kept as a small satellite sliver (not the old 10%/5%) — this book's
+# derived market model has silver/gold appreciating far faster than every other category
+# over the back-dated history (a real feature of the underlying NAV data, not a modeling
+# choice), so even a modest target weight compounds into an outsized CURRENT-value share
+# book-wide. A real advisor's book reads as equity/debt at the top; metals should be a
+# footnote, not neck-and-neck with them.
 STYLE_ALLOCATIONS = {
     "safe": {
-        "cash_equivalent": 0.25, "good_debt": 0.40, "conservative_hybrid": 0.20,
-        "gold": 0.10, "low_risk_equity": 0.05,
+        "cash_equivalent": 0.25, "good_debt": 0.43, "conservative_hybrid": 0.20,
+        "gold": 0.05, "low_risk_equity": 0.07,
     },
     "conservative_growth": {
-        "good_debt": 0.30, "conservative_hybrid": 0.20, "balanced_advantage": 0.20,
-        "low_risk_equity": 0.15, "gold": 0.10, "cash_equivalent": 0.05,
+        "good_debt": 0.33, "conservative_hybrid": 0.20, "balanced_advantage": 0.20,
+        "low_risk_equity": 0.17, "gold": 0.05, "cash_equivalent": 0.05,
     },
     "balanced": {
-        "balanced_advantage": 0.20, "aggressive_hybrid": 0.20, "low_risk_equity": 0.15,
-        "mid_risk_equity": 0.15, "good_debt": 0.15, "gold": 0.10, "international_equity": 0.05,
+        "balanced_advantage": 0.20, "aggressive_hybrid": 0.20, "low_risk_equity": 0.17,
+        "mid_risk_equity": 0.17, "good_debt": 0.16, "gold": 0.05, "international_equity": 0.05,
     },
     "growth": {
-        "mid_risk_equity": 0.30, "low_risk_equity": 0.15, "high_risk_equity": 0.15,
-        "aggressive_hybrid": 0.15, "international_equity": 0.10, "gold": 0.10, "multi_asset": 0.05,
+        "mid_risk_equity": 0.32, "low_risk_equity": 0.15, "high_risk_equity": 0.17,
+        "aggressive_hybrid": 0.15, "international_equity": 0.11, "gold": 0.05, "multi_asset": 0.05,
     },
     "aggressive": {
-        "high_risk_equity": 0.52, "mid_risk_equity": 0.28, "international_equity": 0.10,
-        "silver": 0.05, "multi_asset": 0.05,
+        # No silver here (unlike the old version): silver's realized CAGR in this book's
+        # NAV history is so far above every other category (~27% vs ~11-15%) that even a
+        # 2% sliver compounds into an outsized share for an older, long-tenured, no-cap
+        # (age 45+) client — small allocation, disproportionate current-value footprint.
+        "high_risk_equity": 0.55, "mid_risk_equity": 0.30, "international_equity": 0.12,
+        "multi_asset": 0.03,
     },
-    # Deliberately extreme — heavily one high-volatility category. A portfolio's simulated
-    # worst-year drop is driven by its category mix (not fund count), so this is what pushes
-    # a client into the −20/−30% "too risky" band on the radar. Kept for the mismatch demo.
+    # Deliberately extreme — heavily one high-volatility equity category. Still not
+    # actually enough to breach the Risk Radar's tolerance bands (see "reckless" below):
+    # diversified equity categories run ~14-15% annual vol in this book's derived market
+    # model, well short of what a 10-35% drawdown tolerance needs. Kept as the "very
+    # equity-heavy but technically still just equity" rung of the ladder.
     "very_aggressive": {
         "high_risk_equity": 0.82, "mid_risk_equity": 0.18,
     },
+    # The two styles that actually trip the suitability-mismatch flag — silver/gold are
+    # the only categories volatile enough (~32%/~17% annual vol vs ~15% for equity) to
+    # push a 1-year 95% VaR past the conservative/balanced tolerance bands (not the
+    # *aggressive* 35% band — nothing in this book's derived market model gets there).
+    # Their returns correlate negatively with equity (the classic gold/silver hedge), so
+    # diluting either with equity to look "more like a real portfolio" mostly cancels the
+    # effect instead of adding to it — pairing them with each other instead preserves the
+    # breach while still reading as a two-fund book, not one giant metal bet. Two distinct
+    # styles (silver-led vs gold-led) so the book's "why call them" reasons don't all cite
+    # the same metal. Used only by the deliberate-mismatch archetypes.
+    "reckless": {                    # ~26% VaR — clears conservative (10%) AND balanced (20%)
+        "silver": 0.90, "gold": 0.10,
+    },
+    "reckless_gold": {               # ~17% VaR — clears conservative (10%) only
+        "gold": 0.90, "silver": 0.10,
+    },
 }
 
-# STYLE_ALLOCATIONS is authored safest→riskiest, so its key order IS the risk ladder.
-# A goal's time horizon nudges the client's style along it: money you need soon should
-# sit in safer funds, money you won't touch for decades can ride more risk.
-STYLE_LADDER = list(STYLE_ALLOCATIONS)
+# The ordinary risk ladder — safest to riskiest. A goal's time horizon nudges a client's
+# style along it: money you need soon should sit in safer funds, money you won't touch
+# for decades can ride more risk. Deliberately excludes "reckless"/"reckless_gold": those
+# are hand-assigned to specific archetype clients only (see _client_plan) and must never
+# be reachable by the ordinary horizon-drift shift in _goal_style — an organic client
+# landing there by chance defeats the whole point of keeping their book-wide footprint
+# small and deliberate.
+STYLE_LADDER = [
+    "safe", "conservative_growth", "balanced", "growth", "aggressive", "very_aggressive",
+]
 
 # Per stated risk_profile, the mix of ACTUAL styles clients end up with.
 # The tails (e.g. conservative→very_aggressive) are the deliberate mismatches.
@@ -528,16 +562,29 @@ def _required_monthly_sip(target: float, g_mu: float, n_months: int) -> float:
 def _client_plan(rng: Random, i: int, universe):
     """Decide one client's profile, style and edge-case flags."""
     # Force a visible block of extreme cases so the demo always has them.
-    if i < 6:                       # severe suitability mismatch
-        profile, style, concentrated, needs_attention = "conservative", "very_aggressive", False, False
+    if i < 6:                       # severe suitability mismatch — alternate silver-led
+                                     # and gold-led so these 6 don't all cite the same
+                                     # metal as "the reason to call".
+        profile = "conservative"
+        style = "reckless" if i % 2 == 0 else "reckless_gold"
+        concentrated, needs_attention = False, False
     elif i < 12:                    # concentration flag
         profile = _weighted(rng, PROFILE_WEIGHTS)
         style, concentrated, needs_attention = "aggressive", True, False
     elif i < 24:                    # needs-attention: over-exposed AND badly behind on goals —
-                                     # lands bottom-right ("Needs attention") on the Risk Radar
-                                     # quadrant, not just off to one side of it.
+                                     # a metal-heavy style (mostly) is what actually lands
+                                     # them bottom-right ("Needs attention"), not just at
+                                     # the bottom. "reckless_gold" only clears the
+                                     # *conservative* tolerance (~17% VaR), so balanced
+                                     # clients need the stronger silver-led "reckless"
+                                     # (~26%) to clear their wider 20% band — keeping both
+                                     # in rotation (rather than silver for everyone) is
+                                     # what keeps the call list from reading as one story.
         profile = _weighted(rng, [("conservative", 0.5), ("balanced", 0.5)])
-        style = rng.choice(["aggressive", "very_aggressive"])
+        if profile == "conservative":
+            style = rng.choice(["reckless", "reckless_gold", "reckless_gold", "very_aggressive"])
+        else:
+            style = rng.choice(["reckless", "reckless", "reckless", "very_aggressive"])
         concentrated = rng.random() < 0.3
         needs_attention = True
     else:                           # the organic distribution
@@ -570,7 +617,14 @@ def generate(session=None) -> dict:
             profile, style, concentrated, needs_attention = _client_plan(rng, i, universe)
 
             name = _pick_name(rng, seen_names)
-            age = rng.randint(24, 68)
+            # A "reckless" (silver/gold-led) client stays YOUNG, so `_portfolio_cap`
+            # keeps their absolute rupee exposure small — the point is a client whose
+            # ALLOCATION is dangerously concentrated, not one whose metal bet is big
+            # enough to distort the whole book's category totals.
+            if style in ("reckless", "reckless_gold"):
+                age = rng.randint(24, 29)  # strictly < 30 — the tightest _portfolio_cap bracket
+            else:
+                age = rng.randint(24, 68)
             client = Client(name=name, age=age, risk_profile=profile)
             session.add(client)
 
@@ -607,11 +661,13 @@ def generate(session=None) -> dict:
             goal_monthly: dict = {}    # goal_obj -> desired monthly SIP (pre-affordability)
             for goal, (_, amount, target) in zip(goal_objs, goals_spec):
                 years = max((target - BASE_DATE).days / 365.0, 0.25)
-                # needs_attention clients stay genuinely over-exposed on EVERY goal —
-                # skipping the horizon tilt is what makes their simulated drawdown
-                # actually breach tolerance, landing them on the Risk Radar instead of
-                # just reading as "behind" with an unremarkable allocation.
-                goal_style = style if needs_attention else _goal_style(rng, style, years)
+                # needs_attention clients, and anyone deliberately put in a "reckless*"
+                # style, stay genuinely over-exposed on EVERY goal — skipping the horizon
+                # tilt is what makes their simulated drawdown actually breach tolerance
+                # and land them on the Risk Radar, instead of a short-horizon goal
+                # quietly diluting it back down the ladder into an unremarkable mix.
+                is_reckless = style in ("reckless", "reckless_gold")
+                goal_style = style if (needs_attention or is_reckless) else _goal_style(rng, style, years)
                 goal_style_of[goal] = goal_style
                 g_mu = _style_mu(goal_style)
                 span_months = max(int(round((invest_years + years) * 12)), 1)

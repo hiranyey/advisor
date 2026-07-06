@@ -367,7 +367,6 @@ th.r {
 /* ── Misc ── */
 .dim {
 	color: var(--faint);
-	font-size: 12px;
 }
 .mini {
 	color: var(--mut);

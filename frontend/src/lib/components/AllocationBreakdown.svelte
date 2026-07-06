@@ -14,7 +14,7 @@
 	// Only surface a chip when the share moved a visible amount (≥0.1pp).
 	function delta(cat) {
 		const d = deltas?.[cat];
-		return d != null && Math.abs(d) >= 0.001 ? d : null;
+		return d != null && Math.abs(d) >= 0.0001 ? d : null;
 	}
 </script>
 
@@ -88,7 +88,7 @@
 			filter 170ms ease;
 	}
 	.allocbar.dimmed .seg:not(.hot) {
-		opacity: 0.35;
+		opacity: 0.5;
 	}
 	.seg.hot {
 		z-index: 2;
