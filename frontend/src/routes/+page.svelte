@@ -267,9 +267,9 @@
 			<div class="card full" in:fly={rise(5)}>
 				<h2>Risk vs. goals, whole book</h2>
 				<p class="h2sub">
-					Every scored client — right of center means over their comfort zone; below the gold
-					line means their toughest goal is unlikely on the current plan. Click a dot to open
-					that client.
+					Every scored client — right of center means riskier than they're comfortable with; below
+					the gold line means their toughest goal is unlikely on the current plan. Click a dot to
+					open that client.
 				</p>
 				<div class="h2rule"></div>
 				<RiskQuadrant points={radar.scatter} />

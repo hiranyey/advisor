@@ -80,19 +80,19 @@
 			/>
 
 			<g font-family="Inter, sans-serif" font-size="10.5" fill="#96690a" font-weight="600">
-				<text x={geom.zeroX + 4} y={PAD.t + 11}>over tolerance →</text>
-				<text x={geom.zeroX - 4} y={PAD.t + 11} text-anchor="end">← within tolerance</text>
-				<text x={W - PAD.r} y={geom.confY - 5} text-anchor="end">{pct(confidence)} goal confidence</text>
+				<text x={geom.zeroX + 4} y={PAD.t + 11}>riskier than comfortable →</text>
+				<text x={geom.zeroX - 4} y={PAD.t + 11} text-anchor="end">← within comfort zone</text>
+				<text x={W - PAD.r} y={geom.confY - 5} text-anchor="end">{pct(confidence)} odds of hitting goals</text>
 				<text x={PAD.l - 8} y={PAD.t + 4} text-anchor="end">1.0</text>
 				<text x={PAD.l - 8} y={H - PAD.b} text-anchor="end">0</text>
 			</g>
 
 			<!-- Quadrant labels — muted ink, never the data color (dataviz: text stays in text tokens) -->
 			<g font-family="Georgia, serif" font-size="13" fill="#96690a" opacity="0.55" font-style="italic">
-				<text x={PAD.l + 10} y={PAD.t + 22}>Healthy</text>
-				<text x={W - PAD.r - 10} y={PAD.t + 22} text-anchor="end">Rebalance</text>
-				<text x={PAD.l + 10} y={H - PAD.b - 10}>Coach</text>
-				<text x={W - PAD.r - 10} y={H - PAD.b - 10} text-anchor="end">Fix now</text>
+				<text x={PAD.l + 10} y={PAD.t + 22}>On track</text>
+				<text x={W - PAD.r - 10} y={PAD.t + 22} text-anchor="end">Too much risk</text>
+				<text x={PAD.l + 10} y={H - PAD.b - 10}>Behind on goals</text>
+				<text x={W - PAD.r - 10} y={H - PAD.b - 10} text-anchor="end">Needs attention</text>
 			</g>
 
 			{#each plotted as p}
@@ -139,7 +139,10 @@
 					>
 				</div>
 				<div class="tiprow">
-					<span class="k">Worst goal chance</span><span class="v">{pct(hovered.p.worst_goal_prob)}</span>
+					<span class="k">Chance of hitting weakest goal</span>
+					<span class="v" class:bad={hovered.p.worst_goal_prob < confidence}
+						>{pct(hovered.p.worst_goal_prob)}</span
+					>
 				</div>
 			</div>
 		{/if}

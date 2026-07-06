@@ -59,7 +59,7 @@
 
 <style>
 	.alloclist {
-		margin-top: 8px;
+		margin-top: 16px;
 	}
 
 	/* Let a hovered segment pop above the bar's edges. */
@@ -67,21 +67,34 @@
 		overflow: visible;
 		margin: 4px 0;
 	}
+	/* The hit target (.seg) never changes size — only the decorative ::after
+	   pseudo-element grows. If the segment itself resized, growth clipped by a
+	   scrolled ancestor's edge would fire a spurious mouseleave mid-hover,
+	   shrinking it back, un-clipping it, re-triggering mouseenter, and so on
+	   forever. Keeping the real element static avoids that loop entirely. */
 	.seg {
 		position: relative;
+		transition: opacity 170ms ease;
+	}
+	.seg::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+		background: inherit;
 		transform-origin: center;
+		pointer-events: none;
 		transition:
 			transform 170ms var(--ease-out, ease),
-			opacity 170ms ease,
 			filter 170ms ease;
 	}
-	.allocbar.dimmed .seg {
+	.allocbar.dimmed .seg:not(.hot) {
 		opacity: 0.35;
 	}
 	.seg.hot {
-		opacity: 1;
-		transform: scaleY(1.7);
 		z-index: 2;
+	}
+	.seg.hot::after {
+		transform: scaleY(2);
 		filter: brightness(1.06) saturate(1.25);
 	}
 
@@ -140,11 +153,12 @@
 
 	@media (prefers-reduced-motion: reduce) {
 		.seg,
+		.seg::after,
 		.allocrow,
 		.allocrow .ci {
 			transition: none;
 		}
-		.seg.hot {
+		.seg.hot::after {
 			transform: none;
 		}
 	}

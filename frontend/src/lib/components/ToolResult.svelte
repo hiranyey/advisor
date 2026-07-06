@@ -48,6 +48,11 @@
 	function profileClass(p) {
 		return p === 'aggressive' ? 'crit' : p === 'conservative' ? 'good' : 'warn';
 	}
+	// run_sql cells: cap decimals at 2dp so long floats don't blow out the table.
+	function fmtCell(v) {
+		if (typeof v === 'number' && !Number.isInteger(v)) return v.toFixed(2);
+		return v ?? '—';
+	}
 	// Rows the advisor can commit: matched proposals mapped to the ledger shape.
 	const committable = $derived(
 		(result?.proposed ?? [])
@@ -359,7 +364,7 @@
 					<thead><tr>{#each result.columns as col}<th>{col}</th>{/each}</tr></thead>
 					<tbody>
 						{#each result.rows.slice(0, 20) as row}
-							<tr>{#each result.columns as col}<td class="num">{row[col] ?? '—'}</td>{/each}</tr>
+							<tr>{#each result.columns as col}<td class="num">{fmtCell(row[col])}</td>{/each}</tr>
 						{/each}
 					</tbody>
 				</table>

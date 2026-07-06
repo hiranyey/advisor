@@ -12,17 +12,27 @@ Design goals (a book that tells a story on stage):
                        reason" (these light up the Book Risk Radar / stress test)
       · under-risked — aggressive clients parked in debt/cash (return drag)
       · concentrated — a single fund or category dominating the portfolio (>25% / >40%)
-  - Realistic saving, not fantasy: each goal's SIP is sized from its actual funding gap,
-    horizon and expected return, then scaled by the client's savings discipline (mostly
-    below 1x) and capped by what they can afford. Most clients under-save, so goal success
-    probabilities spread across the whole range (median ~0.45) instead of everyone hitting
-    every goal. Current funding is horizon-aware — you've barely started a 30-year goal.
+      · needs-attention — over-exposed AND badly under-saving, so they land bottom-right
+                       on the Risk Radar quadrant (too much risk + low goal odds), not
+                       just off to one side of it
+  - SIP first, transactions second: a client's realistic monthly saving (age-based income
+    proxy × a savings-discipline factor, mostly < 1x — most people under-save) IS the
+    number that lands on the SipSchedule row. Past transactions are then simulated as that
+    SAME monthly amount, grown ~6%/year back over the client's own investing tenure (mostly
+    2.5–6y, a minority 8–15y for the "started long ago" cases) and bought at real historical
+    NAVs. Current value falls out of genuine market moves on a genuine contribution history
+    — it never drifts off to a number unrelated to what the SIP says they invest.
+  - Most clients under-save relative to their goals, so goal success probabilities spread
+    across the whole range instead of everyone hitting every goal — a goal's funding is
+    whatever this bottom-up contribution history actually produces, not an assumed fraction
+    of its target.
   - Fully deterministic: a fixed RNG seed + truncate-and-reload means re-running seed.py
     reproduces the exact same book. Generate once, reuse forever.
 
-Portfolio construction works in CURRENT-VALUE space: we pick target category weights,
-convert to units via each fund's latest NAV, then back-date the buy(s) at that date's
-historical NAV. So concentration/allocation are exact as the holdings view will show them.
+Portfolio construction works in MONTHLY-SIP space: we pick target category weights, size
+each fund's slice of the client's SIP, then back-date a growing contribution history at
+each date's real historical NAV. Current value/allocation/concentration are whatever falls
+out of that — never an independently chosen number.
 """
 
 import bisect
@@ -40,6 +50,15 @@ from app.models import Client, Goal, GoalHolding, SipSchedule, Transaction
 
 SEED = 42
 N_CLIENTS = 173
+# `_required_monthly_sip` assumes a level payment the WHOLE span; `_make_sip_buys`
+# actually ramps up from a lower level over the historical portion (see ANNUAL_GROWTH),
+# so a client's true average contribution runs below that ideal — and the real
+# Monte Carlo engine's success probability is a tail estimate on a compounding,
+# volatile path, not the naive expected-value trajectory this script can replicate
+# exactly. This constant is an empirical correction (tuned against `run_book_analysis`
+# output, not derived) so `discipline`'s intended spread survives contact with the real
+# engine instead of reading uniformly harsher than intended.
+REQUIRED_SIP_CALIBRATION = 1.4
 BASE_DATE = date(2026, 7, 4)  # fixed "today" for reproducibility
 PER_CATEGORY = 15             # funds sampled into the investable universe per category
 MIN_HISTORY_DAYS = 500        # need ~2y of NAVs so back-dated buys can be priced
@@ -302,26 +321,6 @@ def _goal_style(rng: Random, base_style: str, years: float) -> str:
     return STYLE_LADDER[idx]
 
 
-def _draw_progress(rng: Random, years: float) -> float:
-    """How funded a goal is *today*, as a fraction of its target — HORIZON-AWARE.
-
-    You've barely started a 30-year retirement but a car 2 years out is well underway,
-    so the funded fraction is capped by the time you've had to save. This also keeps the
-    engine honest: without it, a long goal's small current holding compounds (25y at ~12%
-    is ~17×) straight past the target, making every long goal a trivial 100%. Drawn skewed
-    toward the low end of each horizon's band, so goals read as work-in-progress."""
-    if years <= 3:
-        lo, hi = 0.20, 1.10      # near-term: can be nearly (or already) funded
-    elif years <= 7:
-        lo, hi = 0.12, 0.80
-    elif years <= 15:
-        lo, hi = 0.08, 0.55
-    else:
-        lo, hi = 0.05, 0.35      # decades out: only just begun
-    r = rng.random() ** 1.6      # bias toward the lower end of the band
-    return lo + (hi - lo) * r
-
-
 def _portfolio_cap(age: int | None) -> float | None:
     """Age-appropriate ceiling on total current portfolio value (₹), or None.
 
@@ -370,94 +369,79 @@ def _merge_dust(holdings, floor: float = MIN_WEIGHT):
     return kept
 
 
-# A single buy shouldn't dwarf the book. Positions are accumulated over several tranches,
-# each targeting roughly this much of today's value, so no one transaction is a giant
-# lumpsum. Small positions still land in one buy (which is small in absolute terms).
-TRANCHE_VALUE_LO = 250_000     # ~₹2.5L
-TRANCHE_VALUE_HI = 600_000     # ~₹6L
-MAX_TRANCHES = 8
+# Assumed year-over-year rise in what a client contributes, independent of any
+# *scheduled* future step-up rate on the SIP row — plain income growth over a career.
+# Drives the shape of the back-dated tranches in `_make_sip_buys`.
+ANNUAL_GROWTH = 0.06
 
 # Fraction of positions that also carry a partial redeem (a realistic mid-life trim).
-# We over-buy up-front and sell the excess later, so the NET position still values to
-# target_value — the derived holdings view is unchanged, only the ledger gains a sell.
 SELL_PROB = 0.12
 
 
-def _make_buys(rng: Random, series, fid, target_value):
-    """Back-dated tranches whose NET current value == target_value.
+def _make_sip_buys(rng: Random, series, fid, monthly_amount_today: float, invest_years: float):
+    """This fund's slice of the client's SIP, simulated as a growing series of yearly
+    lumpsum tranches back-dated at real historical NAVs.
     -> [(date, type, units, nav, amount)], type in {"buy", "redeem"}.
 
-    The number of tranches scales with the position's size: a large holding is built up
-    over several buys spread across the accumulation window (like real investing), never a
-    single abrupt lumpsum. Tranche sizes are jittered and dates sorted so a position
-    accumulates over time.
+    `monthly_amount_today` is the SAME number that becomes this fund's SipSchedule row —
+    transactions are DERIVED from the SIP, not the other way around. Tranche k grows
+    ~ANNUAL_GROWTH per year toward that level (contributions rising with income, even when
+    the *scheduled* future step-up is 0%), so current value is the genuine result of a
+    growing contribution history hitting real market moves — it stays anchored to the SIP
+    amount instead of drifting off to an unrelated figure.
 
-    ~SELL_PROB of positions additionally trim part of the position: we buy extra units
-    up-front and redeem them at a later date, so the leftover NET units still equal
-    target_value / latest_nav — holdings/allocation/concentration are untouched, the
-    ledger just shows a genuine sell."""
-    ds, ns = series[fid]
-    latest_nav = ns[-1]
-    net_units = target_value / latest_nav
-
+    ~SELL_PROB of positions also carry a later partial redeem, for ledger texture."""
+    if monthly_amount_today <= 0:
+        return []
+    ds, _ = series[fid]
     earliest = ds[0] + timedelta(days=30)
-    horizon = BASE_DATE - timedelta(days=int(rng.uniform(365, 6 * 365)))
-    lo = max(earliest, horizon)
-    hi = BASE_DATE - timedelta(days=30)
-    if lo >= hi:
-        lo = hi - timedelta(days=30)
+    start = max(BASE_DATE - timedelta(days=int(round(invest_years * 365))), earliest)
+    end = BASE_DATE - timedelta(days=30)
+    span = max((end - start).days, 30)
+    n_years = max(1, min(12, round(invest_years)))
 
-    # Decide on a partial trim: over-buy `sell_units`, then redeem them later. Net stays
-    # at net_units (> 0), so the holdings view is identical to a buy-only position.
-    sell_units = net_units * rng.uniform(0.15, 0.40) if rng.random() < SELL_PROB else 0.0
-    total_units = net_units + sell_units
-
-    # Tranche count grows with size; capped so we don't spray into dozens of tiny buys.
-    per_tranche = rng.uniform(TRANCHE_VALUE_LO, TRANCHE_VALUE_HI)
-    n = max(1, min(MAX_TRANCHES, round(target_value / per_tranche)))
-    if sell_units > 0:
-        n = max(n, 2)  # need at least one buy on the books before we can redeem
-
-    # Unequal-ish split of the units across tranches (weights sum to 1).
-    weights = [rng.uniform(0.6, 1.4) for _ in range(n)]
-    wsum = sum(weights)
-    weights = [w / wsum for w in weights]
-
-    # Spread the buy dates across the window and sort so the position accumulates over time.
-    span = (hi - lo).days
-    offsets = sorted(rng.randrange(span) for _ in range(n)) if span > 1 else [0] * n
-
-    rows = []
-    allocated = 0.0
+    rows = []  # [date, type, units, nav]
+    total_units = 0.0
     buy_dates, cum_units = [], []
-    for i, (w, off) in enumerate(zip(weights, offsets)):
-        # Last tranche takes the exact remainder so units sum to total_units precisely.
-        units = total_units - allocated if i == n - 1 else total_units * w
-        allocated += units
-        nav_date, nav = _nav_on_or_before(series, fid, lo + timedelta(days=off))
-        rows.append((nav_date, "buy", round(units, 4), round(nav, 4), round(units * nav, 2)))
+    for k in range(n_years):
+        # k=0 is the oldest year; k=n_years-1 is "this year", landing at today's level.
+        level = monthly_amount_today / ((1 + ANNUAL_GROWTH) ** (n_years - 1 - k))
+        yearly_amount = level * 12 * rng.uniform(0.85, 1.15)
+        off = int(span * (k + rng.uniform(0.15, 0.85)) / n_years)
+        nav_date, nav = _nav_on_or_before(series, fid, start + timedelta(days=min(off, span)))
+        units = yearly_amount / nav
+        rows.append([nav_date, "buy", units, nav])
+        total_units += units
         buy_dates.append(nav_date)
-        cum_units.append(allocated)
+        cum_units.append(total_units)
 
-    if sell_units > 0:
-        # Redeem after the earliest tranche that already covers sell_units (can't sell
-        # units not yet held), and before today.
-        k = next((idx for idx, c in enumerate(cum_units) if c >= sell_units), n - 1)
+    if len(rows) >= 2 and rng.random() < SELL_PROB:
+        sell_units = total_units * rng.uniform(0.15, 0.40)
+        k = next((idx for idx, c in enumerate(cum_units) if c >= sell_units), len(rows) - 1)
         sell_lo = buy_dates[k] + timedelta(days=15)
         sell_hi = BASE_DATE - timedelta(days=5)
         if sell_lo >= sell_hi:
             sell_lo = sell_hi - timedelta(days=5)
         off = rng.randrange((sell_hi - sell_lo).days) if sell_hi > sell_lo else 0
         nav_date, nav = _nav_on_or_before(series, fid, sell_lo + timedelta(days=off))
-        rows.append((nav_date, "redeem", round(sell_units, 4),
-                     round(nav, 4), round(sell_units * nav, 2)))
-    return rows
+        rows.append([nav_date, "redeem", sell_units, nav])
+
+    return [(d, t, round(u, 4), round(n, 4), round(u * n, 2)) for d, t, u, n in rows]
 
 
-def _make_goals(rng: Random):
-    """1–3 distinct goals. -> [(name, target_amount, target_date)]."""
-    n = rng.choice([1, 1, 2, 2, 2, 3])
-    names = rng.sample(list(GOAL_TYPES), min(n, len(GOAL_TYPES)))
+def _make_goals(rng: Random, force_names: list[str] | None = None):
+    """1–3 distinct goals. -> [(name, target_amount, target_date)].
+
+    `force_names` guarantees those goal types are always included (used for the
+    needs-attention archetype: a low SIP can drift into funding a small, short goal by
+    accident, so we pin at least one genuinely large, long-horizon goal a modest
+    contribution can't realistically catch up on)."""
+    n = max(rng.choice([1, 1, 2, 2, 2, 3]), len(force_names or []))
+    n = min(n, len(GOAL_TYPES))
+    forced = list(dict.fromkeys(force_names or []))
+    remaining_pool = [g for g in GOAL_TYPES if g not in forced]
+    extra = rng.sample(remaining_pool, max(0, n - len(forced)))
+    names = forced + extra
     goals = []
     for name in names:
         (amt_lo, amt_hi), (yr_lo, yr_hi) = GOAL_TYPES[name]
@@ -507,35 +491,61 @@ def _savings_discipline(rng: Random) -> float:
     return rng.uniform(1.40, 1.90)       # disciplined / ahead
 
 
-def _required_monthly_sip(current_value: float, target: float, g_mu: float,
-                          n_months: int) -> float:
-    """The level monthly SIP that, with current holdings growing at the goal's expected
-    return `g_mu`, is projected to just reach `target` by the horizon. 0 if holdings alone
-    already get there. Uses the same expected monthly growth the engine implies
-    (E[step] = e^(mu/12)) so 'adequacy = 1.0' lands a goal near a coin-flip before its
-    own volatility and allocation tilt it either way."""
+def _pick_invest_years(rng: Random, age: int) -> float:
+    """How many years ago this client's oldest holding began.
+
+    Most clients read as having invested for the last few years (matching the book's
+    historical default). A minority — skewed toward clients old enough to have had a
+    longer career runway — started much earlier, so the book isn't uniformly "everyone
+    began investing around the same time." Bounded so nobody's history predates a
+    plausible working age (~22)."""
+    max_possible = max(1.5, min(20.0, age - 22))
+    if rng.random() < 0.18:
+        lo, hi = 8.0, 15.0
+    else:
+        lo, hi = 2.5, 6.0
+    hi = min(hi, max_possible)
+    lo = min(lo, hi)
+    return rng.uniform(lo, hi)
+
+
+def _style_mu(style: str) -> float:
+    """A style's blended expected annual return, from its category weights."""
+    return sum(w * FALLBACK_MU.get(cat, 0.08) for cat, w in STYLE_ALLOCATIONS[style].items())
+
+
+def _required_monthly_sip(target: float, g_mu: float, n_months: int) -> float:
+    """The level monthly SIP that, compounding at `g_mu` from zero, lands exactly on
+    `target` after `n_months`. Paying less than this (a discipline factor < 1) therefore
+    lands proportionally short of the target — `discipline * required` compounds to
+    `discipline * target` — regardless of how long `n_months` is, so a harder/longer
+    goal doesn't quietly become easier just because compounding has longer to work."""
     r = math.exp(g_mu / 12) - 1
-    grown_holdings = current_value * math.exp(g_mu * n_months / 12)
-    gap = target - grown_holdings
-    if gap <= 0:
-        return 0.0
     annuity = ((1 + r) ** n_months - 1) / r if r > 1e-9 else n_months
-    return gap / annuity
+    return target / annuity if annuity > 0 else target
 
 
 def _client_plan(rng: Random, i: int, universe):
     """Decide one client's profile, style and edge-case flags."""
     # Force a visible block of extreme cases so the demo always has them.
     if i < 6:                       # severe suitability mismatch
-        profile, style, concentrated = "conservative", "very_aggressive", False
+        profile, style, concentrated, needs_attention = "conservative", "very_aggressive", False, False
     elif i < 12:                    # concentration flag
         profile = _weighted(rng, PROFILE_WEIGHTS)
-        style, concentrated = "aggressive", True
+        style, concentrated, needs_attention = "aggressive", True, False
+    elif i < 24:                    # needs-attention: over-exposed AND badly behind on goals —
+                                     # lands bottom-right ("Needs attention") on the Risk Radar
+                                     # quadrant, not just off to one side of it.
+        profile = _weighted(rng, [("conservative", 0.5), ("balanced", 0.5)])
+        style = rng.choice(["aggressive", "very_aggressive"])
+        concentrated = rng.random() < 0.3
+        needs_attention = True
     else:                           # the organic distribution
         profile = _weighted(rng, PROFILE_WEIGHTS)
         style = _weighted(rng, STYLE_BY_PROFILE[profile])
         concentrated = rng.random() < 0.08
-    return profile, style, concentrated
+        needs_attention = False
+    return profile, style, concentrated, needs_attention
 
 
 def generate(session=None) -> dict:
@@ -554,92 +564,131 @@ def generate(session=None) -> dict:
         with raw.cursor() as cur:
             universe, series = build_universe(cur, rng)
 
-        fund_cat = {fid: cat for cat, funds in universe.items() for fid, _ in funds}
-
         seen_names: set[str] = set()
 
         for i in range(N_CLIENTS):
-            profile, style, concentrated = _client_plan(rng, i, universe)
+            profile, style, concentrated, needs_attention = _client_plan(rng, i, universe)
 
             name = _pick_name(rng, seen_names)
             age = rng.randint(24, 68)
             client = Client(name=name, age=age, risk_profile=profile)
             session.add(client)
 
-            goals_spec = _make_goals(rng)
+            goals_spec = _make_goals(rng, force_names=["Retirement"] if needs_attention else None)
             goal_objs = []
             for gname, amount, target in goals_spec:
                 g = Goal(client=client, name=gname, target_amount=amount, target_date=target)
                 session.add(g)
                 goal_objs.append(g)
 
-            # ── Portfolio is DERIVED from the goals ────────────────────────────
-            # Each goal is funded to a random fraction of its target (mostly
-            # partial), and only the funds bought *for* that goal are tagged to it.
-            # So funded_value/target reads as real progress, and total portfolio
-            # value falls out of the goals instead of being an unrelated number.
-            # Per-goal current funding = target × progress. Then lift any goal that
-            # would sit below the book's 5% dust floor up to that floor — but never
-            # above its own target — so a goal only yields a sub-5% sliver when the
-            # goal itself is that small next to its siblings (a rare true outlier).
-            budgets = [
-                float(amount) * _draw_progress(rng, (target - BASE_DATE).days / 365.0)
-                for _, amount, target in goals_spec
-            ]
-            caps = [float(amount) for _, amount, _ in goals_spec]  # never fund past target
-            # Iterate: lifting a goal to the 5% floor raises the book, which raises the
-            # floor — a few passes converge so every liftable goal truly clears 5%.
-            for _ in range(4):
-                book = sum(budgets) or 1.0
-                budgets = [max(b, min(MIN_WEIGHT * book, cap))
-                           for b, cap in zip(budgets, caps)]
+            # ── SIP first: size it from what each goal actually needs ──────────────
+            # required_monthly is the level SIP that, compounding at the goal's expected
+            # return over the client's FULL span (their invest_years of history plus the
+            # years still to go — the same span `_make_sip_buys` back-dates over), lands
+            # exactly on the target. Paying `required * discipline` therefore lands
+            # (roughly, ignoring volatility) on `target * discipline` — so discipline < 1
+            # is a REAL shortfall, however long the horizon, not just a smaller but still
+            # comfortable number. This is what stops long goals being trivially easy: a
+            # bigger/harder goal has a bigger required_monthly, so the same discipline
+            # produces a proportionally bigger shortfall, not an easier one.
+            invest_years = _pick_invest_years(rng, age)
+            # No portfolio value exists yet to anchor the affluence boost in
+            # `_monthly_savings_capacity` — goal size is the available proxy for it.
+            goal_value_proxy = sum(float(amount) for _, amount, _ in goals_spec)
+            capacity = _monthly_savings_capacity(rng, age, goal_value_proxy)
+            if needs_attention:
+                # Severely under-saving, not just "a bit short" — this is what makes a
+                # goal genuinely fail rather than merely read as somewhat behind.
+                discipline = rng.uniform(0.05, 0.15)
+            else:
+                discipline = _savings_discipline(rng)
 
-            total_budget = sum(budgets) or 1.0
-            holdings: list[list] = []  # [fund_id, goal_obj, current_value]
+            goal_style_of: dict = {}   # goal_obj -> style used for its funds
+            goal_monthly: dict = {}    # goal_obj -> desired monthly SIP (pre-affordability)
+            for goal, (_, amount, target) in zip(goal_objs, goals_spec):
+                years = max((target - BASE_DATE).days / 365.0, 0.25)
+                # needs_attention clients stay genuinely over-exposed on EVERY goal —
+                # skipping the horizon tilt is what makes their simulated drawdown
+                # actually breach tolerance, landing them on the Risk Radar instead of
+                # just reading as "behind" with an unremarkable allocation.
+                goal_style = style if needs_attention else _goal_style(rng, style, years)
+                goal_style_of[goal] = goal_style
+                g_mu = _style_mu(goal_style)
+                span_months = max(int(round((invest_years + years) * 12)), 1)
+                required = _required_monthly_sip(float(amount), g_mu, span_months)
+                adequacy = discipline * REQUIRED_SIP_CALIBRATION * rng.uniform(0.8, 1.2)
+                goal_monthly[goal] = required * adequacy
+
+            # Affordability cap: scale all goals down together if the client can't fund
+            # them combined — a secondary check; `discipline` above is the main lever.
+            desired_total = sum(goal_monthly.values())
+            if desired_total > capacity and desired_total > 0:
+                aff_scale = capacity / desired_total
+                goal_monthly = {g: v * aff_scale for g, v in goal_monthly.items()}
+            total_monthly = sum(goal_monthly.values())
+
+            # ── Pick funds per goal, size each fund's slice of the SIP ──────────────
+            fund_monthly: list[list] = []  # [fund_id, goal_obj, monthly_amount]
             used_funds: set[int] = set()
-            for goal, budget, (_, _, target) in zip(goal_objs, budgets, goals_spec):
-                # Fund category follows the goal's horizon, not just the client's style:
-                # short-dated goals lean safe, long-dated goals can lean risky.
-                years = (target - BASE_DATE).days / 365.0
-                goal_style = _goal_style(rng, style, years)
-                # Cap funds per goal so each is a real slice. We size against a target
-                # weight above the 5% floor (funds within a goal are unevenly weighted,
-                # so the *smallest* needs headroom to still clear the floor).
-                max_funds = max(1, int((budget / total_budget) / (MIN_WEIGHT * 1.5)))
+            for goal in goal_objs:
+                g_monthly = goal_monthly.get(goal, 0.0)
+                if g_monthly <= 0:
+                    continue
+                goal_style = goal_style_of[goal]
+                share = g_monthly / total_monthly if total_monthly > 0 else 0.0
+                max_funds = max(1, int(share / (MIN_WEIGHT * 1.5)))
                 for fid, w in _pick_weights(rng, goal_style, universe,
                                             exclude=used_funds, max_funds=max_funds):
                     used_funds.add(fid)
-                    holdings.append([fid, goal, budget * w])
+                    fund_monthly.append([fid, goal, g_monthly * w])
 
-            # Merge dust: fold sub-5% funds into larger siblings of the same goal, so
-            # a client holds a handful of meaningful funds (and SIPs) rather than 20+.
-            holdings = _merge_dust(holdings)
+            # Merge dust: fold sub-5% (of total_monthly) funds into larger siblings of
+            # the same goal, so a client holds a handful of meaningful SIPs, not 20+.
+            fund_monthly = _merge_dust(fund_monthly)
 
-            # Age-appropriate ceiling: scale the whole book down if the goal-derived
-            # value outruns what someone this age would plausibly have accumulated.
-            cap = _portfolio_cap(age)
-            if cap is not None and holdings:
-                total = sum(h[2] for h in holdings)
-                if total > cap:
-                    scale = cap * rng.uniform(0.6, 0.95) / total
-                    for h in holdings:
-                        h[2] *= scale
-
-            # Concentration archetype: one fund is meaningfully overweight (enough to trip
-            # the >25% single-fund flag) — but not so dominant it IS the whole portfolio.
-            if concentrated and holdings:
-                total = sum(h[2] for h in holdings) or 1.0
+            # Concentration archetype: one fund draws a meaningfully overweight share of
+            # the WHOLE SIP (enough to trip the >25% single-fund flag once compounded)
+            # — applied here, so both the historical buys and the recorded SIP for that
+            # fund are concentrated together, not just one or the other.
+            if concentrated and fund_monthly:
+                total = sum(h[2] for h in fund_monthly) or 1.0
                 big = rng.uniform(0.35, 0.50)
-                j = max(range(len(holdings)), key=lambda k: holdings[k][2])  # bloat the largest
-                rest = sum(holdings[k][2] for k in range(len(holdings)) if k != j) or 1.0
-                for k in range(len(holdings)):
-                    holdings[k][2] = total * (big if k == j else holdings[k][2] / rest * (1 - big))
+                j = max(range(len(fund_monthly)), key=lambda k: fund_monthly[k][2])
+                rest = sum(fund_monthly[k][2] for k in range(len(fund_monthly)) if k != j) or 1.0
+                for k in range(len(fund_monthly)):
+                    fund_monthly[k][2] = total * (
+                        big if k == j else fund_monthly[k][2] / rest * (1 - big)
+                    )
 
-            # ── Buys + goal tags (per fund) ────────────────────────────────────
-            for fid, goal, value in holdings:
-                if value <= 0:
+            # ── Simulate the back-dated contribution history per fund ───────────────
+            entries = []  # [fund_id, goal_obj, monthly_amount, rows]
+            total_current_value = 0.0
+            for fid, goal, monthly in fund_monthly:
+                if monthly <= 0:
                     continue
-                for nav_date, txn_type, units, nav, amount in _make_buys(rng, series, fid, value):
+                rows = _make_sip_buys(rng, series, fid, monthly, invest_years)
+                net_units = sum(u if t == "buy" else -u for _, t, u, _, _ in rows)
+                total_current_value += net_units * series[fid][1][-1]
+                entries.append([fid, goal, monthly, rows])
+
+            # Age-appropriate ceiling: if the simulated history outruns what someone this
+            # age would plausibly have accumulated, scale BOTH the historical buys and the
+            # recorded SIP down together — the two must never drift apart, even here.
+            age_cap = _portfolio_cap(age)
+            scale = 1.0
+            if age_cap is not None and total_current_value > age_cap:
+                scale = age_cap * rng.uniform(0.6, 0.95) / total_current_value
+            if scale != 1.0:
+                for entry in entries:
+                    entry[2] *= scale
+                    entry[3] = [
+                        (d, t, round(u * scale, 4), n, round(u * scale * n, 2))
+                        for d, t, u, n, _ in entry[3]
+                    ]
+
+            # ── Write transactions + goal tags ───────────────────────────────────────
+            for fid, goal, monthly, rows in entries:
+                for nav_date, txn_type, units, nav, amount in rows:
                     if units <= 0:
                         continue
                     session.add(Transaction(
@@ -651,51 +700,17 @@ def generate(session=None) -> dict:
                 session.add(GoalHolding(client=client, fund_id=fid, goal=goal))
                 stats["goal_holdings"] += 1
 
-            # ── SIPs: sized per goal from its gap, horizon and expected return ──
-            # Each goal's monthly SIP is the amount projected to close its funding gap by
-            # the target date, scaled by the client's savings discipline (mostly < 1, so
-            # most goals stay a bit short) and then capped by what the client can actually
-            # afford. A fund's SIP is that goal's SIP split across its funds by weight.
-            portfolio_value = sum(h[2] for h in holdings if h[2] > 0)
-            capacity = _monthly_savings_capacity(rng, age, portfolio_value)
-            discipline = _savings_discipline(rng)
-
-            goal_funds: dict = defaultdict(list)  # goal_obj -> [(fund_id, value)]
-            for fid, goal, value in holdings:
-                if value > 0:
-                    goal_funds[goal].append((fid, value))
-
-            goal_sip: dict = {}  # goal_obj -> desired total monthly SIP (pre-affordability)
-            for goal in goal_objs:
-                funds = goal_funds.get(goal)
-                if not funds:
-                    continue
-                cur_val = sum(v for _, v in funds)
-                g_mu = sum(v * FALLBACK_MU.get(fund_cat.get(fid, "other"), 0.08)
-                           for fid, v in funds) / cur_val
-                years = max((goal.target_date - BASE_DATE).days / 365.0, 0.5)
-                n_months = max(int(round(years * 12)), 1)
-                req = _required_monthly_sip(cur_val, float(goal.target_amount), g_mu, n_months)
-                if req <= 0:
-                    continue  # holdings already project to the target — no SIP needed
-                adequacy = discipline * rng.uniform(0.7, 1.3)
-                goal_sip[goal] = req * adequacy
-
-            # Affordability cap: scale all goals down together if the client can't fund them.
-            desired = sum(goal_sip.values())
-            if desired > capacity and desired > 0:
-                scale = capacity / desired
-                goal_sip = {g: s * scale for g, s in goal_sip.items()}
-
-            # Materialize: split each goal's SIP across its funds by weight; skip dust.
-            for goal, sip_total in goal_sip.items():
-                funds = goal_funds[goal]
-                cur_val = sum(v for _, v in funds) or 1.0
+            # ── Write the SIP schedule — the exact monthly figure the transactions
+            # above were built from, shared start date per goal ──────────────────────
+            by_goal: dict = defaultdict(list)  # goal_obj -> [(fund_id, monthly_amount)]
+            for fid, goal, monthly, _ in entries:
+                by_goal[goal].append((fid, monthly))
+            for goal, funds in by_goal.items():
                 stepup = rng.choice([0, 0, 0, 0.05, 0.10])
                 active = rng.random() < 0.9
-                start = BASE_DATE - timedelta(days=rng.randrange(30, 3 * 365))
-                for fid, value in funds:
-                    amount = round(sip_total * value / cur_val, -2)
+                start = BASE_DATE - timedelta(days=rng.randrange(30, max(31, int(invest_years * 365))))
+                for fid, monthly in funds:
+                    amount = round(monthly, -2)
                     if amount < 500:  # sub-₹500 SIPs aren't worth modeling
                         continue
                     session.add(SipSchedule(
@@ -709,6 +724,8 @@ def generate(session=None) -> dict:
             stats[f"profile:{profile}"] += 1
             if concentrated:
                 stats["concentrated"] += 1
+            if needs_attention:
+                stats["needs_attention"] += 1
 
         session.commit()
     finally:
