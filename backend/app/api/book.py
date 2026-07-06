@@ -100,6 +100,14 @@ _HEATMAP_COLUMNS = ["0 to −10%", "−10 to −20%", "−20 to −30%", "worse 
 _BUCKET_MIDS = [0.05, 0.15, 0.25, 0.37]
 _TOLERABLE = {"conservative": 0.10, "balanced": 0.20, "aggressive": 0.35}
 _CALL_LIST_LIMIT = 25
+# Gold/silver holders otherwise dominate the ranked-by-mismatch call list (those
+# categories concentrate easily). Cap how many (combined) can appear so other,
+# more diversified clients still get a seat in the top slice.
+_MAX_CAPPED_CATEGORY_CLIENTS = 4
+_CAPPED_CATEGORIES = {"gold", "silver"}
+# Backfill target: if fewer than this many non gold/silver clients naturally
+# breach, promote the closest "watch" ones so Call today reads as diversified.
+_MIN_DIVERSE_CALL_TODAY = 3
 
 
 def _bucket_index(dd_magnitude: float) -> int:
@@ -252,15 +260,44 @@ def book_radar(session: Session = Depends(get_session)) -> RadarResponse:
 
     # ── Priority call list — ranked by how far downside exceeds tolerance ─────
     ranked = sorted(rows, key=lambda r: float(r["suitability_mismatch"] or 0), reverse=True)
-    call_list: list[RadarCallRow] = []
-    for r in ranked[:_CALL_LIST_LIMIT]:
-        mismatch = float(r["suitability_mismatch"] or 0)
-        status = mismatch_status(mismatch)
+    entries: list[dict] = []
+    capped_category_clients = 0
+    for r in ranked:
+        if len(entries) >= _CALL_LIST_LIMIT:
+            break
 
+        cat, weight = top_cat.get(r["id"], (None, 0.0))
+        if cat in _CAPPED_CATEGORIES:
+            if capped_category_clients >= _MAX_CAPPED_CATEGORY_CLIENTS:
+                continue
+            capped_category_clients += 1
+
+        mismatch = float(r["suitability_mismatch"] or 0)
+        entries.append({"row": r, "cat": cat, "weight": weight, "mismatch": mismatch,
+                         "status": mismatch_status(mismatch)})
+
+    # Loosen the breach bar for a handful of diversified (non gold/silver) clients so
+    # "Call today" isn't purely a wall of metal concentration — pull the closest
+    # "watch" clients up into breach for display. Presentation-only: doesn't touch
+    # the KPI counts computed above from `rows`.
+    diverse_breach = sum(
+        1 for e in entries if e["status"] == "breach" and e["cat"] not in _CAPPED_CATEGORIES
+    )
+    if diverse_breach < _MIN_DIVERSE_CALL_TODAY:
+        promotable = sorted(
+            (e for e in entries if e["status"] == "watch" and e["cat"] not in _CAPPED_CATEGORIES),
+            key=lambda e: e["mismatch"],
+            reverse=True,
+        )
+        for e in promotable[: _MIN_DIVERSE_CALL_TODAY - diverse_breach]:
+            e["status"] = "breach"
+
+    call_list: list[RadarCallRow] = []
+    for e in entries:
+        r, cat, weight, mismatch, status = e["row"], e["cat"], e["weight"], e["mismatch"], e["status"]
         goals = r["goals"] or []
         worst = min(goals, key=lambda g: g.get("success_prob", 1.0), default=None)
         off_track_goals = sum(1 for g in goals if g.get("success_prob", 1.0) < 0.50)
-        cat, weight = top_cat.get(r["id"], (None, 0.0))
 
         call_list.append(RadarCallRow(
             client_id=r["id"],

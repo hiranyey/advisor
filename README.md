@@ -279,10 +279,10 @@ docker run --env-file backend/.env -p 8000:8000 advisoros
 # → http://localhost:8000
 ```
 
-```
+```sh
 docker buildx build \
   --provenance=false --sbom=false \
-  -t asia-southeast1-docker.pkg.dev/project-97144aca-7cda-48e5-a37/advisor-gpu/advisor:1.0 \
+  -t asia-southeast1-docker.pkg.dev/project-97144aca-7cda-48e5-a37/advisor-gpu/advisor:1.14 \
   --push .
 ```
 
