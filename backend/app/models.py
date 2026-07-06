@@ -365,6 +365,32 @@ class CopilotMessage(Base):
     conversation: Mapped["CopilotConversation"] = relationship(back_populates="messages")
 
 
+# ── Shareable client debriefs (one-pager reports) ──────────────────────────────
+class ClientDebrief(Base):
+    """A generated, shareable one-pager for a client — one Copilot-style turn
+    (question → narrated answer + tool trace) persisted behind a random token so
+    the link keeps working after the advisor closes the tab. Same content shape as
+    CopilotMessage (answer/trace/backend/elapsed_ms) since it's produced by the same
+    app.llm.copilot.run_copilot loop; see app.api.debrief."""
+
+    __tablename__ = "client_debriefs"
+    __table_args__ = (
+        Index("ix_client_debriefs_client", "client_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"))
+    share_token: Mapped[str] = mapped_column(String, unique=True, index=True)
+    question: Mapped[str] = mapped_column(String, nullable=False)
+    answer: Mapped[str] = mapped_column(String, nullable=False)
+    trace: Mapped[Optional[list]] = mapped_column(JSONB)
+    backend: Mapped[Optional[str]] = mapped_column(String)
+    elapsed_ms: Mapped[Optional[float]] = mapped_column(Numeric)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 # ── Derived holdings view (never materialized) ────────────────────────────────
 # Net units × latest NAV per (client, fund), rolled up with the fund's category.
 LATEST_HOLDINGS_VIEW = """

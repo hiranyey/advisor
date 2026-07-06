@@ -362,6 +362,38 @@ class ConversationDetail(BaseModel):
     messages: list[ConversationMessage]
 
 
+# ── Shareable client debriefs (one-pager reports) ──────────────────────────────
+class DebriefSuggestionsResponse(BaseModel):
+    client_id: int
+    suggestions: list[str]
+
+
+class DebriefJobRequest(BaseModel):
+    question: str
+
+
+class DebriefRow(BaseModel):
+    """One row in a client's past-reports list."""
+
+    id: int
+    question: str
+    share_token: str
+    created_at: datetime
+
+
+class DebriefDetail(BaseModel):
+    """The public one-pager payload — served by token, no client_id required."""
+
+    client_id: int
+    client_name: str
+    question: str
+    answer: str
+    trace: list[ToolTrace]
+    backend: str | None
+    elapsed_ms: float | None
+    created_at: datetime
+
+
 # ── Transaction commit (confirm half of the NL data-entry flow) ───────────────
 class TxnCommitRow(BaseModel):
     fund_id: int

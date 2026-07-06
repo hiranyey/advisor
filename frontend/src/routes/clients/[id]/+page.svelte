@@ -6,7 +6,8 @@
 	import AllocationBreakdown from '$lib/components/AllocationBreakdown.svelte';
 	import ValueChart from '$lib/components/ValueChart.svelte';
 	import RiskPill from '$lib/components/RiskPill.svelte';
-	import { ChevronLeft, TriangleAlert, User, Repeat, TrendingUp, ArrowDownRight, ArrowUpRight, Activity, ShieldAlert, Cpu, Gauge, Target } from '@lucide/svelte';
+	import ShareDebriefModal from '$lib/components/ShareDebriefModal.svelte';
+	import { ChevronLeft, TriangleAlert, User, Repeat, TrendingUp, ArrowDownRight, ArrowUpRight, Activity, ShieldAlert, Cpu, Gauge, Target, Share2 } from '@lucide/svelte';
 
 	// Quick, non-blocking mount fade — cards rise in with a light stagger.
 	const rise = (i) => ({ y: 10, duration: 240, delay: i * 55 });
@@ -24,6 +25,8 @@
 	// never blocks the ledger/holdings render.
 	let insights = $state(null);
 	let insightsError = $state(null);
+
+	let shareOpen = $state(false);
 
 	$effect(() => {
 		load(id);
@@ -88,8 +91,15 @@
 		<div class="titlewrap">
 			<span class="titleicon"><User size={44} strokeWidth={1.5} /></span>
 			<h1 class="title">{client.name}</h1>
+			<button class="sharebtn" onclick={() => (shareOpen = true)}>
+				<Share2 size={14} strokeWidth={2} /> Share
+			</button>
 		</div>
 		<div class="titlerule"></div>
+
+		{#if shareOpen}
+			<ShareDebriefModal clientId={id} onClose={() => (shareOpen = false)} />
+		{/if}
 		<p class="runline">
 			<RiskPill profile={client.risk_profile} />
 			<span>· Age {client.age ?? '—'}</span>
@@ -393,6 +403,28 @@
 </div>
 
 <style>
+	.sharebtn {
+		margin-left: auto;
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		font-family: var(--font-sans);
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		white-space: nowrap;
+		background: var(--brand);
+		color: var(--on-brand);
+		border: 1.5px solid var(--primary-900);
+		box-shadow: var(--shadow-stamp-sm);
+		padding: 9px 14px;
+		cursor: pointer;
+	}
+	.sharebtn:hover {
+		transform: translate(-1px, -1px);
+		box-shadow: var(--shadow-stamp);
+	}
 	.back {
 		text-decoration: none;
 		display: inline-flex;

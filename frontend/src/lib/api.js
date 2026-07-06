@@ -47,6 +47,11 @@ export function copilotJobEventsUrl(jobId) {
 	return new URL(`${API_BASE}/copilot/jobs/${jobId}/events`, window.location.origin).toString();
 }
 
+// Same idea for a debrief report job (see api.startDebriefJob).
+export function debriefJobEventsUrl(jobId) {
+	return new URL(`${API_BASE}/debrief/jobs/${jobId}/events`, window.location.origin).toString();
+}
+
 export const api = {
 	listClients: (params) => get('/clients', params),
 	getClient: (id) => get(`/clients/${id}`),
@@ -69,7 +74,14 @@ export const api = {
 	// DB-backed conversation history.
 	listConversations: () => get('/conversations'),
 	getConversation: (id) => get(`/conversations/${id}`),
-	deleteConversation: (id) => del(`/conversations/${id}`)
+	deleteConversation: (id) => del(`/conversations/${id}`),
+	// Shareable one-pager reports: suggestions → job → persisted, publicly linkable
+	// report. Same job+SSE shape as the Copilot (debriefJobEventsUrl above).
+	getDebriefSuggestions: (id) => get(`/clients/${id}/debrief/suggestions`),
+	listDebriefs: (id) => get(`/clients/${id}/debriefs`),
+	startDebriefJob: (id, question) => post(`/clients/${id}/debrief/jobs`, { question }),
+	stopDebriefJob: (jobId) => del(`/debrief/jobs/${jobId}`),
+	getDebrief: (token) => get(`/debrief/${token}`)
 };
 
 // ── Formatting ────────────────────────────────────────────────────────────────

@@ -18,10 +18,16 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 
 from app import scheduler
-from app.api import book, clients, conversations, copilot
+from app.api import book, clients, conversations, copilot, debrief
 from app.api.copilot import JOBS
 from app.db import Base, engine
-from app.models import BookInsight, CopilotConversation, CopilotMessage, RadarSnapshot
+from app.models import (
+    BookInsight,
+    ClientDebrief,
+    CopilotConversation,
+    CopilotMessage,
+    RadarSnapshot,
+)
 from app.tasks.refresh_navs import refresh_navs
 
 
@@ -36,6 +42,7 @@ async def lifespan(app: FastAPI):
             CopilotMessage.__table__,
             RadarSnapshot.__table__,
             BookInsight.__table__,
+            ClientDebrief.__table__,
         ],
     )
     # Columns added to an already-existing table after the initial seed — create_all
@@ -49,7 +56,12 @@ async def lifespan(app: FastAPI):
         scheduler.shutdown()
         # Don't abandon in-flight Copilot jobs on shutdown/redeploy — give them a
         # chance to finish, then cancel whatever's left.
-        tasks = [job.task for job in JOBS.values() if job.task and not job.task.done()]
+        tasks = [
+            job.task
+            for jobs in (JOBS, debrief.JOBS)
+            for job in jobs.values()
+            if job.task and not job.task.done()
+        ]
         if tasks:
             _, pending = await asyncio.wait(tasks, timeout=10)
             for task in pending:
@@ -84,6 +96,7 @@ api.include_router(clients.router)
 api.include_router(book.router)
 api.include_router(copilot.router)
 api.include_router(conversations.router)
+api.include_router(debrief.router)
 
 
 @api.get("/health")
