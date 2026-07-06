@@ -150,9 +150,14 @@
 
 	<!-- ── get_client_brief ──────────────────────────────────────────────────── -->
 	{:else if entry.tool === 'get_client_brief'}
+		{@const briefId = result.client_id ?? entry.args?.client_id}
 		<div class="briefhead">
 			<div>
-				<div class="bname">{result.name}</div>
+				{#if briefId != null}
+					<button class="bname blink" onclick={() => goto(`/clients/${briefId}`)}>{result.name}</button>
+				{:else}
+					<div class="bname">{result.name}</div>
+				{/if}
 				<div class="cap">
 					{#if result.age}{result.age} yrs · {/if}<span class="pill {profileClass(result.risk_profile)}">{result.risk_profile}</span> · {inr(result.portfolio_value)}
 				</div>
@@ -244,17 +249,55 @@
 		</div>
 		<ProjectionChart history={result.history ?? []} projection={result.projection} />
 
-	<!-- ── stress_book ───────────────────────────────────────────────────────── -->
+	<!-- ── stress_book: breaches on a crash · gainers on a rally ─────────────── -->
 	{:else if entry.tool === 'stress_book'}
+		{@const up = result.direction === 'up'}
+		{@const book = result.book ?? {}}
 		<div class="stresshead">
-			<div class="kpimini crit"><div class="kv">{result.breaches}</div><div class="kl">breach tolerance</div></div>
-			<div class="kpimini"><div class="kv">{result.clients_evaluated}</div><div class="kl">clients hit</div></div>
+			{#if up}
+				<div class="kpimini good">
+					<div class="kv in-text">{book.expected_pct > 0 ? '+' : ''}{pct(book.expected_pct, 1)}</div>
+					<div class="kl">expected book move</div>
+				</div>
+				<div class="kpimini"><div class="kv in-text">{inr(book.expected_amount)}</div><div class="kl">expected gain</div></div>
+			{:else}
+				<div class="kpimini crit"><div class="kv">{result.breaches}</div><div class="kl">breach tolerance</div></div>
+				<div class="kpimini"><div class="kv">{result.clients_evaluated}</div><div class="kl">clients hit</div></div>
+			{/if}
 			<div class="shockdesc">
-				{#each Object.entries(result.shock ?? {}) as [cat, d]}<span class="pill {d < 0 ? 'crit' : 'good'}">{catLabel(cat)} {(d * 100).toFixed(0)}%</span>{/each}
+				{#each Object.entries(result.shock ?? {}) as [cat, d]}<span class="pill {d < 0 ? 'crit' : 'good'}">{catLabel(cat)} {d > 0 ? '+' : ''}{(d * 100).toFixed(0)}%</span>{/each}
 				{#if result.horizon_months}<span class="cap">over {result.horizon_months} mo · {result.mode}</span>{/if}
 			</div>
 		</div>
-		{#if result.ranked?.length}
+		{#if book.value != null}
+			<div class="rangeline">
+				<span class="rl-lab">Book range</span>
+				<span class="rl-bad">{pct(book.downside_pct, 1)}</span>
+				<span class="rl-mid">expected {book.expected_pct > 0 ? '+' : ''}{pct(book.expected_pct, 1)}</span>
+				<span class="rl-good">+{pct(book.upside_pct, 1)}</span>
+			</div>
+		{/if}
+		{#if up}
+			{#if result.movers?.length}
+				<p class="cap">Biggest beneficiaries — expected ₹ gain across the book</p>
+				<div class="tablewrap">
+					<table>
+						<thead><tr><th>Client</th><th>Profile</th><th class="r">Expected</th><th class="r">Gain</th><th class="r">Best case</th></tr></thead>
+						<tbody>
+							{#each result.movers.slice(0, 8) as c}
+								<tr class="rowlink" onclick={() => goto(`/clients/${c.client_id}`)}>
+									<td class="name">{c.name}</td>
+									<td><span class="pill {profileClass(c.risk_profile)}">{c.risk_profile}</span></td>
+									<td class="r num in-text">{c.expected_pct > 0 ? '+' : ''}{pct(c.expected_pct, 1)}</td>
+									<td class="r num in-text">{inr(c.expected_amount)}</td>
+									<td class="r num">+{pct(c.upside_pct, 0)}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		{:else if result.ranked?.length}
 			<div class="tablewrap">
 				<table>
 					<thead><tr><th>Client</th><th>Profile</th><th class="r">Loss</th><th class="r">Tolerable</th><th class="r">Over by</th></tr></thead>
@@ -271,6 +314,8 @@
 					</tbody>
 				</table>
 			</div>
+		{:else}
+			<p class="cap">No clients breach tolerance under this shock.</p>
 		{/if}
 
 	<!-- ── add_transactions: proposed rows + commit ──────────────────────────── -->
@@ -301,7 +346,10 @@
 
 	<!-- ── run_sql: ad-hoc read-only query result ────────────────────────────── -->
 	{:else if entry.tool === 'run_sql'}
-		<pre class="raw">{result.query}</pre>
+		<details class="sqlbox">
+			<summary><Database size={12} strokeWidth={2} /> SQL query</summary>
+			<pre class="raw">{result.query}</pre>
+		</details>
 		{#if result.columns?.length}
 			<p class="cap">
 				{result.row_count} row{result.row_count === 1 ? '' : 's'}{#if result.truncated} · truncated to {result.row_count}{/if}
@@ -454,6 +502,10 @@
 		color: var(--outflow);
 		font-weight: 700;
 	}
+	.in-text {
+		color: var(--inflow);
+		font-weight: 700;
+	}
 	.err {
 		color: var(--secondary-700);
 		font-size: 13px;
@@ -470,6 +522,21 @@
 		font-weight: 700;
 		font-size: 19px;
 		color: var(--ink);
+	}
+	button.blink {
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		text-align: left;
+		text-decoration: underline;
+		text-decoration-style: dotted;
+		text-underline-offset: 3px;
+		transition: color 120ms ease;
+	}
+	button.blink:hover {
+		color: var(--brand-strong);
+		text-decoration-style: solid;
 	}
 	.sipline {
 		display: flex;
@@ -661,6 +728,40 @@
 	.kpimini.crit {
 		border-left-color: var(--outflow);
 	}
+	.kpimini.good {
+		border-left-color: var(--inflow);
+	}
+	.rangeline {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+		font-size: 12px;
+		font-variant-numeric: tabular-nums;
+		padding: 7px 10px;
+		margin-bottom: 10px;
+		background: var(--card-2);
+		border: 1px solid var(--primary-200);
+	}
+	.rl-lab {
+		font-size: 10px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--mut);
+		font-weight: 700;
+	}
+	.rl-bad {
+		color: var(--outflow);
+		font-weight: 700;
+	}
+	.rl-good {
+		color: var(--inflow);
+		font-weight: 700;
+	}
+	.rl-mid {
+		color: var(--ink-2);
+		font-weight: 600;
+	}
 	.kpimini .kv {
 		font-family: var(--font-serif);
 		font-size: 30px;
@@ -713,6 +814,35 @@
 		padding: 10px;
 		overflow-x: auto;
 		border: 1px solid var(--primary-200);
+	}
+	.sqlbox {
+		margin-bottom: 8px;
+	}
+	.sqlbox summary {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		cursor: pointer;
+		font-family: var(--font-sans);
+		font-size: 10.5px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--mut);
+		user-select: none;
+		list-style: none;
+	}
+	.sqlbox summary::-webkit-details-marker {
+		display: none;
+	}
+	.sqlbox summary :global(svg) {
+		flex: none;
+	}
+	.sqlbox summary:hover {
+		color: var(--ink-2);
+	}
+	.sqlbox[open] summary {
+		margin-bottom: 6px;
 	}
 	:global(.okmark) {
 		color: var(--inflow);

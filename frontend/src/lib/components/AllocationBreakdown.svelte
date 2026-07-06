@@ -1,12 +1,21 @@
 <script>
 	import { inr, pct, catLabel, catColor } from '$lib/api.js';
 	import { catIcon } from '$lib/icons.js';
+	import { ArrowUp, ArrowDown } from '@lucide/svelte';
 
 	// allocation: [{ category, value, weight }]
-	let { allocation = [] } = $props();
+	// deltas: { [category]: weight_change }  — change in share since the first scored day
+	//   (a fraction; ×100 = percentage points). Optional; chips hidden when absent.
+	let { allocation = [], deltas = {} } = $props();
 
 	// Shared hover state links the bar segment and its list row, both directions.
 	let hovered = $state(null);
+
+	// Only surface a chip when the share moved a visible amount (≥0.1pp).
+	function delta(cat) {
+		const d = deltas?.[cat];
+		return d != null && Math.abs(d) >= 0.001 ? d : null;
+	}
 </script>
 
 <div class="allocbar" class:dimmed={hovered !== null} role="img" aria-label="category allocation">
@@ -35,6 +44,13 @@
 		>
 			<span class="ci" style="color:{catColor(a.category)}"><Icon size={15} strokeWidth={1.9} /></span>
 			<span class="cn">{catLabel(a.category)}</span>
+			{#if delta(a.category) != null}
+				{@const d = delta(a.category)}
+				<span class="cd num" class:up={d > 0} class:down={d < 0} title="share change vs a month ago">
+					{#if d > 0}<ArrowUp size={11} strokeWidth={2.6} />{:else}<ArrowDown size={11} strokeWidth={2.6} />{/if}
+					{Math.abs(d * 100).toFixed(1)}%
+				</span>
+			{/if}
 			<span class="cv num">{inr(a.value)}</span>
 			<span class="cp num">{pct(a.weight, 1)}</span>
 		</div>
@@ -99,6 +115,27 @@
 	}
 	.allocrow.hot .ci {
 		transform: scale(1.25);
+	}
+
+	/* Share-change chip: how this category's slice moved since the first scored run. */
+	.cd {
+		display: inline-flex;
+		align-items: center;
+		gap: 2px;
+		font-size: 11px;
+		font-weight: 700;
+		font-variant-numeric: tabular-nums;
+		padding: 1px 5px 1px 3px;
+		border-radius: 3px;
+		white-space: nowrap;
+	}
+	.cd.up {
+		color: var(--inflow);
+		background: color-mix(in srgb, var(--inflow) 12%, transparent);
+	}
+	.cd.down {
+		color: var(--outflow);
+		background: color-mix(in srgb, var(--outflow) 12%, transparent);
 	}
 
 	@media (prefers-reduced-motion: reduce) {

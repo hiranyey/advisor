@@ -13,10 +13,39 @@
 		ArrowRight
 	} from '@lucide/svelte';
 
-	let { text } = $props();
+	// `clients` is [{name, id}] — any of these names appearing in the prose is turned into
+	// a link to that client's detail page (see linkify).
+	let { text, clients = [] } = $props();
 
 	const SPECIAL = new Set(['callout', 'stats', 'stat', 'progress', 'compare']);
 	const blocks = $derived(parse(text ?? ''));
+
+	// name→id index + a single alternation regex, longest-name-first so "Rajesh Kumar" wins
+	// over a bare "Rajesh". Keys are escaped the same way the prose is, so matching lines up.
+	const nameIndex = $derived.by(() => {
+		const map = new Map();
+		for (const c of clients ?? []) {
+			if (c?.name && c.id != null) map.set(esc(String(c.name)), c.id);
+		}
+		const names = [...map.keys()]
+			.sort((a, b) => b.length - a.length)
+			.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+		const re = names.length
+			? new RegExp(`(?<![\\w&;])(${names.join('|')})(?![\\w])`, 'g')
+			: null;
+		return { map, re };
+	});
+
+	// Wrap client names in an app link. Runs on already-escaped text with no tags yet, so
+	// there's nothing to accidentally match inside — bold/em/code wrap it fine afterward.
+	function linkify(t) {
+		const { map, re } = nameIndex;
+		if (!re) return t;
+		return t.replace(re, (m) => {
+			const id = map.get(m);
+			return id != null ? `<a class="clink" href="/clients/${id}">${m}</a>` : m;
+		});
+	}
 
 	// ── Block splitter: separate fenced regions from markdown prose ─────────────
 	function parse(src) {
@@ -66,6 +95,7 @@
 	}
 	function inline(s) {
 		let t = esc(s);
+		t = linkify(t); // client names → detail-page links, before any tags exist
 		t = t.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
 		t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 		t = t.replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, '$1<em>$2</em>');
@@ -272,6 +302,18 @@
 	.md :global(a) {
 		color: var(--brand-strong);
 		text-decoration: underline;
+	}
+	.md :global(a.clink) {
+		color: var(--brand-strong);
+		font-weight: 600;
+		text-decoration: underline;
+		text-decoration-style: dotted;
+		text-underline-offset: 2px;
+		cursor: pointer;
+	}
+	.md :global(a.clink:hover) {
+		text-decoration-style: solid;
+		background: var(--card-2);
 	}
 	.md :global(hr) {
 		border: none;

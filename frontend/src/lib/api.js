@@ -59,6 +59,7 @@ export const api = {
 	bookInsights: () => get('/book/insights'),
 	refreshBookInsights: () => post('/book/insights/refresh'),
 	bookTrend: () => get('/book/trend'),
+	bookAllocationTrend: () => get('/book/allocation-trend'),
 	// Copilot: one message in, a job back immediately — the caller opens
 	// copilotJobEventsUrl(job_id) to stream tool calls/reasoning/the final answer.
 	startCopilotJob: (body) => post('/copilot/jobs', body),

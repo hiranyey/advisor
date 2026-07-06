@@ -18,4 +18,5 @@ disable=
     too-many-public-methods,
     too-many-boolean-expressions,
     too-many-format-args,
-    too-many-ancestors
+    too-many-ancestors,
+    missing-class-docstring,

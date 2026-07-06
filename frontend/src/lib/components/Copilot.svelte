@@ -68,6 +68,10 @@
 	let conversations = $state([]);
 	let currentId = $state(null);
 	onMount(loadConversations);
+	// Load the client roster up front so the narrated answer can linkify client names to
+	// their detail pages (see ensureClients / AnswerBody). Best-effort; links just won't
+	// appear if it fails.
+	onMount(ensureClients);
 
 	// The open conversation lives in `?c=<id>` so the browser's back/forward buttons
 	// step through conversations instead of dumping the user back on the empty state
@@ -508,7 +512,7 @@
 						{#if m.error}
 							<div class="answer err">{m.content}</div>
 						{:else if m.content}
-							<div class="answer"><AnswerBody text={m.content} /></div>
+							<div class="answer"><AnswerBody text={m.content} clients={allClients ?? []} /></div>
 						{:else if m.streaming}
 							<div class="thinking">
 								{#if m.trace?.length}

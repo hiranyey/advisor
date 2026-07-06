@@ -34,7 +34,7 @@ from sim_kernel.state import MarketModel
 from ..gpu.client import backend_label
 from ..tools import impl
 
-MAX_SQL_CALLS_PER_TURN = 2  # one shot + one retry if the first query errors — not a
+MAX_SQL_CALLS_PER_TURN = 3  # one shot + one retry if the first query errors — not a
                             # license to iterate/explore; see run_sql's tool docstring
 
 # Schema reference for `run_sql` — every table/view the DB actually has (mirrors
@@ -96,13 +96,22 @@ Your tools:
   category exposure, over-concentrated in a single fund house).
 - get_client_brief: the latest analysis for one client (goal probabilities, risk, suitability).
 - run_whatif: re-simulate one client with a change (SIP delta, reallocation, lump sum,
-  horizon shift, return shock) and return before/after goal probabilities.
+  horizon shift, return shock) and return before/after goal probabilities. Its `return_shock`
+  lever is the single-client version of stress_book's shock — pass {{category: annual_delta}}
+  to model a price move in one asset class (e.g. gold) and, in Monte Carlo, the correlated
+  categories move with it. Use this (or project_portfolio) when the advisor asks about ONE
+  client; use stress_book for the whole book.
 - project_portfolio: project one client's portfolio VALUE forward N years (default 10),
   combining their actual value-to-date with a future best/median/worst-case range — use
   this for "portfolio health/value over the next N years" and for SIP/lump-sum/reallocation
   what-ifs the advisor wants to see as a value-over-time chart (run_whatif is for goal
   success-probability before/after instead).
-- stress_book: apply one market shock across the whole book; return who breaches tolerance.
+- stress_book: apply one market shock across the whole book and return who breaches
+  tolerance. This is THE tool for "what happens if <category> moves and how does the rest of
+  the book react" — its Monte Carlo mode propagates the shock to every OTHER category through
+  the covariance matrix Σ, so shocking one asset class (e.g. gold) automatically drags the
+  correlated ones (equity, debt, etc.) with it. Use it for any hypothetical price/return move
+  book-wide, including "simulate gold falling/spiking and see how the other funds respond."
 - rank_book: the suitability-mismatch "who do I call first" list.
 - rank_goal_shortfalls: every off-track goal book-wide, ranked by expected ₹ shortfall —
   "which goals have the biggest funding gap" (a different cut than rank_book's risk ranking).
@@ -116,7 +125,11 @@ Your tools:
 - run_sql: a LAST-RESORT escape hatch for one-off lookups/aggregates none of the tools
   above cover — most questions ("who's overexposed", "biggest shortfall", "riskier over
   time") already have a dedicated tool above; reach for those first, they're cached and
-  their numbers are the ones the advisor should trust. Capped at {MAX_SQL_CALLS_PER_TURN}
+  their numbers are the ones the advisor should trust. It only READS the data that already
+  exists — it CANNOT simulate, forecast, or model a hypothetical market move. Any "what if",
+  "simulate", "if <category> drops/spikes", or "how would the other funds react" question is
+  a simulation, not a lookup: route it to stress_book (book-wide) or run_whatif/
+  project_portfolio (one client), never to run_sql. Capped at {MAX_SQL_CALLS_PER_TURN}
   calls per turn (one shot + one retry if it errors) — think the query through instead of
   trial-and-error, and NEVER call it to "double-check" a number a dedicated tool already
   gave you. If it comes back as a small aggregate (a handful of numbers), explain what they
@@ -233,7 +246,10 @@ def _agent():
         and portfolio downside. sip_delta: ₹ change to monthly SIP. lump_sum: one-time ₹
         (+ invest / − withdraw). reallocate: {"from": cat, "to": cat, "pct": 0.10}.
         reduce_concentration: {"category": cat, "cap": 0.25, "to": cat}. horizon_shift:
-        ± months on every goal. return_shock: {category: annual_return_delta}."""
+        ± months on every goal. return_shock: {category: annual_return_delta} — the
+        single-client version of stress_book's shock; in Monte Carlo the correlated
+        categories move with the shocked one, so e.g. {"gold": -0.15} also drags the assets
+        correlated with gold. Use this when the question is about ONE named client."""
         return impl.run_whatif(
             ctx.deps.session, ctx.deps.model, client_id,
             sip_delta=sip_delta, lump_sum=lump_sum, reallocate=reallocate,
@@ -271,11 +287,22 @@ def _agent():
 
     @agent.tool
     def stress_book(ctx: RunContext[CopilotDeps], shock: dict, filters: dict | None = None) -> dict:
-        """Apply one market shock across the whole book and return who breaches tolerance.
-        shock: per-category deltas + optional horizon_months, e.g.
-        {"high_risk_equity": -0.20, "horizon_months": 3}. Runs Monte Carlo (correlated
-        spillover) by default; set "monte_carlo": false for plain weight×shock arithmetic.
-        filters: e.g. {"risk_profile": "conservative"}."""
+        """Apply one market shock across the whole book. Handles BOTH directions: a negative
+        shock (crash) and a POSITIVE one (rally, e.g. {"gold": 0.20} = "what if gold spikes").
+        Use this for any "what if <category> moves / how does the rest of the book react"
+        question. shock: per-category deltas + optional horizon_months, e.g.
+        {"gold": -0.15, "horizon_months": 3}. Runs Monte Carlo by default, which propagates
+        the shock to every OTHER category through the covariance matrix Σ — so shocking one
+        asset class automatically drags its correlated ones (that IS the "other funds
+        reacting" behaviour); set "monte_carlo": false for plain weight×shock arithmetic with
+        no spillover. filters: e.g. {"risk_profile": "conservative"}.
+
+        Returns `direction` (up|down|flat = net expected book move), `book` (book-wide
+        expected/upside/downside change as % and ₹), `movers` (per-client expected ₹ swing,
+        biggest first — gainers lead on an up shock, hardest-hit lead on a down one), plus
+        `breaches`/`ranked` (who breaches their downside tolerance — only meaningful on a
+        DOWN shock; on an up shock breaches is usually 0, so narrate from `book`+`movers`
+        instead: who gains most and the book-wide upside, NOT "0 clients breach")."""
         return impl.stress_book(ctx.deps.session, ctx.deps.model, shock, filters)
 
     @agent.tool
@@ -316,7 +343,9 @@ def _agent():
     def run_sql(ctx: RunContext[CopilotDeps], query: str) -> dict:
         """Run one ad-hoc, read-only SQL query (a single SELECT or WITH statement) against
         the schema described in your instructions, for questions the other tools don't
-        cover. Rejected if it isn't a single SELECT/WITH statement or contains a
+        cover. Reads existing data ONLY — it cannot simulate or forecast, so never use it for
+        "what if" / "simulate" / hypothetical market-move questions (those go to stress_book
+        or run_whatif). Rejected if it isn't a single SELECT/WITH statement or contains a
         write/DDL keyword. Results are capped at 200 rows. Capped at
         MAX_SQL_CALLS_PER_TURN calls per turn — get the query right rather than exploring;
         never call this to "double-check" a number a dedicated tool already gave you."""

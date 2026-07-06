@@ -57,9 +57,12 @@ Write:
   off-track goals, a positive signal, an opportunity like idle cash). Each needs:
   kind (risk|concentration|goals|opportunity), severity (good|info|watch|critical), a short
   title (under 8 words), a 1-2 sentence body (plain text, no emphasis tags here), and
-  client_ids — the specific client ids from the input that this observation is about (empty
-  list if it's book-wide with no specific clients called out). Prefer fewer, sharper
-  insights over generic filler.
+  client_ids — the specific client ids from the input that this observation is about. Pull
+  them from the matching input field: `movers[].client_id` for status/trend cards,
+  `concentration_hotspots[].client_ids` for concentration cards, and
+  `recurring_off_track_goal_names[].client_ids` for goal cards. Always include the relevant
+  ids when the input provides them; leave the list empty only for a genuinely book-wide card
+  with no clients named in the input. Prefer fewer, sharper insights over generic filler.
 """.strip()
 
 
@@ -144,31 +147,38 @@ def _gather_book_context(session: Session) -> dict:
                     "from_status": before, "to_status": after,
                 })
 
-    # Concentration: how many clients are over the category-min weight, per category.
+    # Concentration: which clients are over the category-min weight, per category.
     concentration_rows = session.execute(
         text(
             """
             with tot as (select client_id, sum(value) as t from latest_holdings group by client_id)
-            select lh.category, count(*) as n
+            select lh.category, lh.client_id
             from latest_holdings lh join tot on tot.client_id = lh.client_id
             where lh.value / nullif(tot.t, 0) >= 0.30
-            group by lh.category order by n desc limit 5
             """
         )
     ).mappings().all()
+    concentration_by_cat: dict[str, list[int]] = {}
+    for r in concentration_rows:
+        concentration_by_cat.setdefault(r["category"], []).append(r["client_id"])
+    concentration_hotspots = sorted(
+        concentration_by_cat.items(), key=lambda kv: len(kv[1]), reverse=True
+    )[:5]
 
-    # Off-track goal aggregates + which goal names recur.
+    # Off-track goal aggregates + which goal names recur + which clients they belong to.
     goal_rows = session.execute(
-        text("select goals from latest_baseline")
-    ).scalars().all()
+        text("select client_id, goals from latest_baseline")
+    ).mappings().all()
     off_track_names: dict[str, int] = {}
+    off_track_client_ids: dict[str, list[int]] = {}
     off_track_total = 0
-    for goals in goal_rows:
-        for g in goals or []:
+    for row in goal_rows:
+        for g in row["goals"] or []:
             if (g.get("success_prob") or 1.0) < 0.50:
                 off_track_total += 1
                 name = g.get("name") or "Unnamed goal"
                 off_track_names[name] = off_track_names.get(name, 0) + 1
+                off_track_client_ids.setdefault(name, []).append(row["client_id"])
     top_off_track_goals = sorted(off_track_names.items(), key=lambda kv: kv[1], reverse=True)[:5]
 
     summary = session.execute(
@@ -191,12 +201,40 @@ def _gather_book_context(session: Session) -> dict:
         "prior_as_of_date": str(prior_date) if prior_date else None,
         "movers": movers[:15],
         "concentration_hotspots": [
-            {"category": r["category"], "client_count": r["n"]} for r in concentration_rows
+            {"category": cat, "client_count": len(ids), "client_ids": ids[:10]}
+            for cat, ids in concentration_hotspots
         ],
         "off_track_goal_count": off_track_total,
         "recurring_off_track_goal_names": [
-            {"name": n, "count": c} for n, c in top_off_track_goals
+            {"name": n, "count": c, "client_ids": off_track_client_ids.get(n, [])[:10]}
+            for n, c in top_off_track_goals
         ],
+    }
+
+
+def _client_pools(context: dict) -> dict[str, list[int]]:
+    """Candidate client ids per insight kind, derived from the same context sent to the LLM.
+    Used to backfill cards the model returned with an empty client_ids list."""
+    def _dedup(ids: list[int]) -> list[int]:
+        seen: dict[int, None] = {}
+        for i in ids:
+            seen.setdefault(i, None)
+        return list(seen)
+
+    movers = _dedup([m["client_id"] for m in context.get("movers", [])])
+    concentration = _dedup([
+        cid for h in context.get("concentration_hotspots", []) for cid in h.get("client_ids", [])
+    ])
+    goals = _dedup([
+        cid for g in context.get("recurring_off_track_goal_names", []) for cid in g.get("client_ids", [])
+    ])
+    any_pool = _dedup(movers + concentration + goals)
+    return {
+        "risk": movers or any_pool,
+        "concentration": concentration or any_pool,
+        "goals": goals or any_pool,
+        "opportunity": movers or any_pool,
+        "_any": any_pool,
     }
 
 
@@ -210,6 +248,14 @@ async def generate_book_insights(session: Session, as_of: date) -> None:
     )
     result = await _agent().run(prompt)
     payload = result.output
+
+    # Deterministic client-id backfill. The LLM frequently omits client_ids even when the
+    # context names them, and book-wide cards legitimately have none — but the dashboard needs
+    # something to drill into, so map each empty card to the relevant client pool by kind.
+    pools = _client_pools(context)
+    for item in payload.insights:
+        if not item.client_ids:
+            item.client_ids = pools.get(item.kind, pools["_any"])[:10]
 
     session.execute(text("delete from book_insights where as_of_date = :d"), {"d": as_of})
     session.execute(

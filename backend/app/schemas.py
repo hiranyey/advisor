@@ -278,6 +278,32 @@ class BookTrendResponse(BaseModel):
     movers: list[MoverRow]
 
 
+class AllocationTrendPoint(BaseModel):
+    as_of_date: date
+    aum: float
+    # Every point carries the SAME category set in the SAME order (value 0 when a
+    # category is absent that day), so the frontend can stack the areas cleanly.
+    allocation: list[CategoryAllocation]
+
+
+class AllocationDelta(BaseModel):
+    category: str
+    start_weight: float
+    end_weight: float
+    weight_change: float  # end - start, as a fraction (multiply by 100 for pp)
+    start_value: float
+    end_value: float
+    value_change: float
+
+
+class AllocationTrendResponse(BaseModel):
+    points: list[AllocationTrendPoint]
+    deltas: list[AllocationDelta]  # per category, biggest |weight_change| first
+    insights: list[str]  # short plain-text observations about how the mix shifted
+    start_date: date | None
+    end_date: date | None
+
+
 # ── Copilot (six-tool LLM loop) ───────────────────────────────────────────────
 class ChatTurn(BaseModel):
     role: str  # 'user' | 'assistant'

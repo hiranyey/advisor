@@ -286,6 +286,8 @@ def book_stress(payload: dict) -> dict:
     raw_clients = [c for c in payload["clients"] if sum(c["holdings"]) > 0]
 
     breaches = []
+    outcomes = []  # per-client outcome distribution — populated for every client, not just
+                   # breaches, so an UPSIDE shock ("what if gold spikes") has numbers to show
     with timer() as elapsed:
         for chunk in _chunks(raw_clients, _safe_batch_size(n_paths)):
             holdings = np.array([c["holdings"] for c in chunk], dtype=float)
@@ -295,7 +297,18 @@ def book_stress(payload: dict) -> dict:
             )
             for row, c in enumerate(chunk):
                 total = float(holdings[row].sum())
-                loss = (total - float(np.quantile(terminals[row], 0.05))) / total
+                p5, p50, p95 = (float(q) for q in np.quantile(terminals[row], [0.05, 0.5, 0.95]))
+                expected = float(terminals[row].mean())
+                # fractional change vs current value (+ = gain, − = loss)
+                outcomes.append({
+                    "client_id": c["id"],
+                    "value": round(total, 2),
+                    "expected_change": round((expected - total) / total, 4),
+                    "median_change": round((p50 - total) / total, 4),
+                    "downside_change": round((p5 - total) / total, 4),   # p5: worst case
+                    "upside_change": round((p95 - total) / total, 4),    # p95: best case
+                })
+                loss = (total - p5) / total
                 tol = pipelines.TOLERABLE_DD.get(
                     c.get("risk_profile") or "balanced", pipelines.TOLERABLE_DD["balanced"],
                 )
@@ -307,7 +320,7 @@ def book_stress(payload: dict) -> dict:
 
     breaches.sort(key=lambda b: b["severity"], reverse=True)
     return {
-        "breaches": breaches, "n_paths": n_paths, "seed": seed,
+        "breaches": breaches, "outcomes": outcomes, "n_paths": n_paths, "seed": seed,
         "backend": BACKEND, "gpu": GPU, "elapsed_ms": round(elapsed() * 1000, 1),
     }
 

@@ -406,6 +406,7 @@ def stress_book(
         states, model, shock, n_paths=settings.mc_n_paths, seed=settings.mc_seed,
     )
     breaches = result["breaches"]
+    outcomes = result.get("outcomes", [])
 
     names = {s.id: s.name for s in states}
     profiles = {s.id: s.risk_profile for s in states}
@@ -420,13 +421,53 @@ def stress_book(
         }
         for b in breaches[:20]
     ]
+
+    # Book-wide aggregates + per-client movers so an UPSIDE shock ("what if gold spikes")
+    # has something to show — a bare breach count reads as "nothing happened" on a rally.
+    book_value = sum(o["value"] for o in outcomes)
+    exp_amount = sum(o["value"] * o["expected_change"] for o in outcomes)
+    up_amount = sum(o["value"] * o["upside_change"] for o in outcomes)
+    down_amount = sum(o["value"] * o["downside_change"] for o in outcomes)
+    book = {
+        "value": round(book_value, 2),
+        "expected_pct": round(exp_amount / book_value, 4) if book_value else 0.0,
+        "expected_amount": round(exp_amount, 2),
+        "upside_pct": round(up_amount / book_value, 4) if book_value else 0.0,
+        "upside_amount": round(up_amount, 2),
+        "downside_pct": round(down_amount / book_value, 4) if book_value else 0.0,
+        "downside_amount": round(down_amount, 2),
+    }
+    # net expected book move decides how the frontend/LLM frames it
+    direction = "up" if book["expected_pct"] > 0.005 else "down" if book["expected_pct"] < -0.005 else "flat"
+    # movers: biggest expected ₹ swing either way, so gainers surface on an upside shock
+    movers = sorted(
+        (
+            {
+                "client_id": o["client_id"],
+                "name": names.get(o["client_id"]),
+                "risk_profile": profiles.get(o["client_id"]),
+                "value": o["value"],
+                "expected_pct": o["expected_change"],
+                "expected_amount": round(o["value"] * o["expected_change"], 2),
+                "upside_pct": o["upside_change"],
+                "downside_pct": o["downside_change"],
+            }
+            for o in outcomes
+        ),
+        key=lambda m: m["expected_amount"],
+        reverse=direction != "down",  # gainers first on an up shock, losers first on a down one
+    )[:20]
+
     deltas = {k: v for k, v in shock.items() if k in CAT_INDEX}
     return {
         "shock": deltas,
         "horizon_months": int(shock.get("horizon_months", 0)) or None,
         "mode": "monte_carlo" ,
+        "direction": direction,
         "clients_evaluated": len([s for s in states if s.total > 0]),
         "breaches": len(breaches),
+        "book": book,
+        "movers": movers,
         "filters": _clean(**filters),
         "ranked": ranked,
         "elapsed_ms": result["elapsed_ms"],

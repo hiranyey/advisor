@@ -11,6 +11,7 @@
 	import Briefing from '$lib/components/Briefing.svelte';
 	import InsightCard from '$lib/components/InsightCard.svelte';
 	import BookTrendChart from '$lib/components/BookTrendChart.svelte';
+	import AllocationTrendChart from '$lib/components/AllocationTrendChart.svelte';
 	import RiskQuadrant from '$lib/components/RiskQuadrant.svelte';
 	import { LayoutDashboard, Layers, TriangleAlert, PhoneCall, Eye, ShieldCheck } from '@lucide/svelte';
 
@@ -32,6 +33,13 @@
 	// Secondary, non-blocking loads — the core numbers render even if these are slow.
 	let insights = $state(null);
 	let trend = $state(null);
+	let allocTrend = $state(null);
+
+	// Per-category share change since the first scored run — powers the chips in the
+	// allocation list.
+	const allocDeltas = $derived(
+		Object.fromEntries((allocTrend?.deltas ?? []).map((d) => [d.category, d.weight_change]))
+	);
 
 	$effect(() => {
 		load();
@@ -49,6 +57,7 @@
 		}
 		loadInsights();
 		api.bookTrend().then((r) => (trend = r)).catch(() => {});
+		api.bookAllocationTrend().then((r) => (allocTrend = r)).catch(() => {});
 	}
 
 	function loadInsights() {
@@ -201,30 +210,6 @@
 			</div>
 		{/if}
 
-		<!-- KPI strip -->
-		<div class="kpis" in:fly={rise(2)}>
-			<div class="kpi crit">
-				<div class="lab">Call Today</div>
-				<div class="val crit num">{radar.kpis.mismatches}</div>
-				<div class="foot">clients whose portfolio is riskier than they're comfortable with</div>
-			</div>
-			<div class="kpi warn">
-				<div class="lab">Behind on Goals</div>
-				<div class="val warn num">{radar.kpis.off_track_clients}</div>
-				<div class="foot">have a goal likely to fall short · {radar.kpis.watch} more close to the line</div>
-			</div>
-			<div class="kpi good">
-				<div class="lab">Typical Goal Chance</div>
-				<div class="val good num">{pct(radar.kpis.median_goal_success)}</div>
-				<div class="foot">how likely an average goal is to be reached on plan</div>
-			</div>
-			<div class="kpi ink">
-				<div class="lab">A Bad Year Could Cost</div>
-				<div class="val num">{neg(radar.kpis.book_var_95)}</div>
-				<div class="foot">the typical portfolio in a rough year · severe cases near {neg(radar.kpis.book_cvar_95)}</div>
-			</div>
-		</div>
-
 		<div class="grid">
 			<!-- Action feed — grouped by urgency instead of one flat table -->
 			<div class="card full" in:fly={rise(3)}>
@@ -278,16 +263,6 @@
 				</p>
 			</div>
 
-			<!-- Book pulse: risk migration over time -->
-			<div class="card full" in:fly={rise(4)}>
-				<h2>Is the book getting riskier?</h2>
-				<p class="h2sub">
-					Every scored client, bucketed by status, on each day the book has been analyzed.
-				</p>
-				<div class="h2rule"></div>
-				<BookTrendChart points={trend?.points ?? []} movers={trend?.movers ?? []} />
-			</div>
-
 			<!-- Risk vs goal-success quadrant -->
 			<div class="card full" in:fly={rise(5)}>
 				<h2>Risk vs. goals, whole book</h2>
@@ -309,7 +284,23 @@
 						simulates. Book AUM {inr(summary.total_aum)} across {summary.total_clients} clients.
 					</p>
 					<div class="h2rule"></div>
-					<AllocationBreakdown allocation={summary.allocation} />
+
+					{#if allocTrend?.points?.length}
+						<div class="alloc-over-time">
+							<p class="minihead">How the mix moved over time</p>
+							<!-- <AllocationTrendChart points={allocTrend.points} /> -->
+							{#if allocTrend.insights?.length}
+								<ul class="alloc-insights">
+									{#each allocTrend.insights as line}
+										<li>{line}</li>
+									{/each}
+								</ul>
+							{/if}
+						</div>
+						<p class="minihead">Where it stands today</p>
+					{/if}
+
+					<AllocationBreakdown allocation={summary.allocation} deltas={allocDeltas} />
 				</div>
 			{/if}
 		</div>
@@ -324,6 +315,48 @@
 <style>
 	.section {
 		margin-bottom: 18px;
+	}
+	.alloc-over-time {
+		margin-bottom: 18px;
+	}
+	.minihead {
+		font-family: var(--font-sans);
+		font-size: 10.5px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--faint);
+		margin: 0 0 8px;
+	}
+	.alloc-over-time + .minihead {
+		margin-top: 4px;
+		padding-top: 14px;
+		border-top: 1px dashed var(--rule);
+	}
+	.alloc-insights {
+		list-style: none;
+		margin: 12px 0 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+	}
+	.alloc-insights li {
+		position: relative;
+		padding-left: 15px;
+		font-size: 13px;
+		color: var(--ink-2);
+		line-height: 1.45;
+	}
+	.alloc-insights li::before {
+		content: '';
+		position: absolute;
+		left: 2px;
+		top: 8px;
+		width: 5px;
+		height: 5px;
+		background: var(--primary-500, var(--primary-800));
+		border-radius: 50%;
 	}
 	.insightgrid {
 		display: grid;
